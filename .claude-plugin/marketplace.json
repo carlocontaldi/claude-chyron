@@ -1,0 +1,5 @@
+{
+  "name": "claude-full-focus-view",
+  "owner": { "name": "carlocontaldi" },
+  "plugins": [{ "name": "live-action", "source": "./" }]
+}
