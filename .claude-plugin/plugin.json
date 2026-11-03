@@ -1,1 +1,1 @@
-{ "name": "full-focus-view", "version": "0.1.0", "description": "Shows the latest running tool in the status line, and in full in a pane opened with /live.", "license": "MIT" }
+{ "name": "full-focus-view", "version": "0.1.1", "description": "Shows the latest running tool in the status line, and in full in a pane opened with /live.", "license": "MIT" }
