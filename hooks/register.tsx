@@ -140,6 +140,8 @@ export const register: Register = on => {
       const ran = await next(e)
       const id = backgroundId(ran.result)
       if (id) backgrounds.set(id, call)
+      // A stopped task sends no task notification.
+      if (e.tool === 'TaskStop') backgrounds.delete(String(call.input.task_id))
       return ran
     } finally {
       calls.delete(e.tool_use_id)
