@@ -44,3 +44,7 @@ tsc -p .
 
 - `Stop` and `SubagentStop` are not delivered to mods in the VS Code panel, so the mod tracks background work from tool calls and task notifications instead.
 - Scheduled routines (`/loop`, cron) and the live output of a running call are not shown.
+
+## License
+
+[MIT](LICENSE)
