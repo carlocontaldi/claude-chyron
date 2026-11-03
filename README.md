@@ -1,6 +1,6 @@
 # Claude Full Focus View
 
-A Claude Code mod (plugin name `live-action`) that sits between the Focus view and the standard view: it shows the latest running tool, background task or subagent call in full, without opening the full transcript.
+A Claude Code mod (plugin name `full-focus-view`) that sits between the Focus view and the standard view: it shows the latest running tool, background task or subagent call in full, without opening the full transcript.
 
 - **Status line** while something runs or has just run: `▶ Bash 12s · <description or command> (+2)`. The last finished call stays as `✓ … done 4s ago` through the turn, so a chain of quick calls does not flash and vanish.
 - **During a turn** the same line replaces the engine's spinner message.
@@ -14,13 +14,13 @@ Checked in the VS Code extension panel. Other surfaces are untested.
 At the prompt of a terminal session:
 
 ```
-/plugin install live-action --marketplace carlocontaldi/claude-full-focus-view
+/plugin install full-focus-view --marketplace carlocontaldi/claude-full-focus-view
 ```
 
 From a shell:
 
 ```
-claude plugin install live-action --marketplace carlocontaldi/claude-full-focus-view
+claude plugin install full-focus-view --marketplace carlocontaldi/claude-full-focus-view
 ```
 
 ## Develop
