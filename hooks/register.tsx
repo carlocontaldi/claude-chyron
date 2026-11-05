@@ -11,6 +11,7 @@ type Call = {
   tool: string
   input: Record<string, unknown>
   startedAt: number
+  seq: number
   isSubagent: boolean
 }
 type Item = {
@@ -20,9 +21,11 @@ type Item = {
   body?: string
   language?: string
   startedAt: number
+  seq: number
   endedAt?: number
 }
 
+let launches = 0
 const calls = new Map<string, Call>()
 const backgrounds = new Map<string, Call>()
 let last: (Call & { endedAt: number }) | undefined
@@ -72,29 +75,36 @@ const callItem = (call: Call, isBackground: boolean): Item => {
     body: shell ?? JSON.stringify(call.input, null, 2),
     language: shell === undefined ? 'json' : 'bash',
     startedAt: call.startedAt,
+    seq: call.seq,
     endedAt: call.endedAt,
   }
 }
 
-// Newest first: running calls, then background work, then the last call that finished.
+// Running calls and background work, latest start first (`seq` orders calls that start in one millisecond).
 const active = (): Item[] => {
   const items = [
-    ...[...calls.values()].reverse().map(call => callItem(call, false)),
-    ...[...backgrounds.values()].reverse().map(call => callItem(call, true)),
-  ]
+    ...[...calls.values()].map(call => callItem(call, false)),
+    ...[...backgrounds.values()].map(call => callItem(call, true)),
+  ].sort((a, b) => b.startedAt - a.startedAt || b.seq - a.seq)
   const isHeld = last && !isIdle && Date.now() - last.endedAt < (isTurn ? TURN_HOLD_MS : HOLD_MS)
   return items.length === 0 && last && isHeld ? [callItem(last, false)] : items
 }
 
-const statusText = (head: Item, restCount: number) =>
-  `${head.endedAt === undefined ? '▶' : '✓'} ${head.label} ${clock(head)} · ${head.summary}${restCount > 0 ? ` (+${restCount})` : ''}`
+const itemText = (item: Item) =>
+  `${item.endedAt === undefined ? '▶' : '✓'} ${item.label} ${clock(item)} · ${item.summary}`
+
+const statusText = (items: Item[]) => items.map(itemText).join(' │ ')
+
+const forgetTasks = (text: string) => {
+  for (const [, id] of text.matchAll(/<task-id>([^<]+)<\/task-id>/g)) backgrounds.delete(id)
+}
 
 const refresh = ($: EngineInterface) => {
-  const [head, ...rest] = active()
+  const items = active()
   // During a turn the spinner already shows this line; the status line is for what outlives it.
-  $.ui.status(head && !isTurn ? statusText(head, rest.length) : undefined)
+  $.ui.status(items.length > 0 && !isTurn ? statusText(items) : undefined)
   $.ui.invalidate('ui.render')
-  if (head) {
+  if (items.length > 0) {
     ticker ??= $.clock.every(TICK_MS, () => refresh($))
   } else {
     ticker?.cancel()
@@ -131,6 +141,7 @@ export const register: Register = on => {
       tool: e.tool,
       input: inputOf(e),
       startedAt: Date.now(),
+      seq: launches++,
       isSubagent: e.agentId !== undefined,
     }
     isIdle = false
@@ -153,7 +164,17 @@ export const register: Register = on => {
   // A finished background task comes back as a notification prompt naming its id.
   on('prompt.submit', ($, e, next) => {
     if (e.origin.kind === 'task-notification') {
-      for (const [, id] of e.text.matchAll(/<task-id>([^<]+)<\/task-id>/g)) backgrounds.delete(id)
+      forgetTasks(e.text)
+      refresh($)
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // An agent's notification delivered into a running turn raises no prompt.submit; its queue row does.
+  on('session.append', { door: 'queue' }, ($, e, next) => {
+    const text = e.message.content.map(block => (typeof block.text === 'string' ? block.text : '')).join('')
+    if (text.startsWith('<task-notification>')) {
+      forgetTasks(text)
       refresh($)
     }
     return next(e)
@@ -178,9 +199,9 @@ export const register: Register = on => {
 
   // A tree is drawn in a plugin card flush against the last chat row; a rewritten message keeps the engine's own row.
   on('ui.render', { component: 'Spinner' }, ($, e, next) => {
-    const [head, ...rest] = active()
-    if (!head) return next(e)
-    return next({ ...e, props: { ...e.props, message: statusText(head, rest.length), suffix: '' } })
+    const items = active()
+    if (items.length === 0) return next(e)
+    return next({ ...e, props: { ...e.props, message: statusText(items), suffix: '' } })
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, ($, e) => {

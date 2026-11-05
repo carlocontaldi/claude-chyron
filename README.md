@@ -2,10 +2,10 @@
 
 A Claude Code mod (plugin name `full-focus-view`) that sits between the Focus view and the standard view: it shows the latest running tool, background task or subagent call in full, without opening the full transcript.
 
-- **Status line** while something runs or has just run: `▶ Bash 12s · <description or command> (+2)`. The last finished call stays as `✓ … done 4s ago` through the turn, so a chain of quick calls does not flash and vanish.
+- **Status line** while something runs or has just run, one entry for every running call and background task, latest start first: `▶ Bash 12s · <description or command> │ ⏳ Agent 340s · <description>`. The last finished call stays as `✓ … done 4s ago` through the turn, so a chain of quick calls does not flash and vanish.
 - **During a turn** the same line replaces the engine's spinner message.
-- **`/live`** toggles a pane with the full command or input, the description, the elapsed time, and one line for each other running item.
-- **Background Bash and Agent launches** show as `⏳` until their task notification arrives.
+- **`/live`** toggles a pane with the latest-started item in full (command or input, description, elapsed time) and one line for each other running item.
+- **Background Bash and Agent launches** show as `⏳` until their task notification arrives (an agent's notification delivered mid-turn is read from the message queue).
 
 Checked in the VS Code extension panel. Other surfaces are untested.
 
