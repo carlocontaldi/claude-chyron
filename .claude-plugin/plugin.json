@@ -1,6 +1,6 @@
 {
   "name": "full-focus-view",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Shows the latest running tool in the status line, and in full in a pane opened with /live.",
   "author": { "name": "Carlo Contaldi" },
   "license": "MIT",
