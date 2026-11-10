@@ -6,6 +6,8 @@ const BODY_LIMIT = 3000
 const TICK_MS = 1000
 const HOLD_MS = 30_000
 const TURN_HOLD_MS = 600_000
+// Cells the engine draws before the message: the spinner mark and the "full-focus-view plugin " attribution.
+const SPINNER_CHROME_CELLS = 26
 
 type Call = {
   tool: string
@@ -98,6 +100,9 @@ const compactingText = () =>
   compactingSince === undefined ? undefined : `Compacting conversation · ${seconds(Date.now() - compactingSince)}`
 
 const statusText = (items: Item[], lead?: string) => [lead, ...items.map(itemText)].filter(Boolean).join(' │ ')
+
+// A hook cannot measure text; estimate the wrap from the viewport width in cells.
+const isWrapped = (text: string, columns?: number) => columns !== undefined && SPINNER_CHROME_CELLS + text.length > columns
 
 const forgetTasks = (text: string) => {
   for (const [, id] of text.matchAll(/<task-id>([^<]+)<\/task-id>/g)) backgrounds.delete(id)
@@ -214,15 +219,19 @@ export const register: Register = on => {
     }
   }).catch(($, e, next) => next(e))
 
-  // A tree is drawn in a plugin card flush against the last chat row; a rewritten message keeps the engine's own row.
-  on('ui.render', { component: 'Spinner' }, ($, e, next) => {
+  // A rewritten message keeps the engine's own row; a wrapped one gets a margin so it clears the chat row above.
+  on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
     const items = active()
     const compacting = compactingText()
     if (items.length === 0 && !compacting) return next(e)
     // Keep the engine's own word (thinking, requesting, ...) first, unless a tool call is the thing running.
     const { message, word, mode } = e.props
     const lead = compacting ?? (mode === 'tool-use' ? undefined : (message ?? word))
-    return next({ ...e, props: { ...e.props, message: statusText(items, lead), suffix: '' } })
+    const text = statusText(items, lead)
+    const row = await next({ ...e, props: { ...e.props, message: text, suffix: '' } })
+    if (!isWrapped(text, e.viewport?.columns)) return row
+    const { Box } = $.ui.resolve(e)
+    return <Box marginTop={1}>{row}</Box>
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, ($, e) => {

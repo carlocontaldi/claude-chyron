@@ -79,6 +79,24 @@ test('while the model thinks, its own word leads the background items', async ($
   expect(drawn.replace(/\d+s/g, 'Ns')).toBe('Working │ ▶ ⏳ Agent Ns · digest')
 })
 
+test('a spinner text too long for the viewport gets a margin above it, a short one does not', async ($, on) => {
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('tool.call', () => ({ result: {} }))
+  await $.tool.call({ tool: 'Bash', command: 'make', description: 'build the whole project' })
+
+  const marginAt = async (columns: number) => {
+    const ui = await $.ui.mount({ ...SPINNER, viewport: { columns, rows: 40 } })
+    const box = await ui.find({ type: 'Box' })
+    await ui.unmount()
+    return box?.props?.marginTop
+  }
+  expect(await marginAt(200)).toBeUndefined()
+  expect(await marginAt(40)).toBe(1)
+})
+
 const SUMMARY = { role: 'user', text: 'summary', toolUses: [] } as const
 
 test('the spinner says Compacting while a compaction runs, then goes back to the engine', async ($, on) => {
