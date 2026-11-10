@@ -1,4 +1,4 @@
-import type { EngineInterface, Register, Timer } from 'claude-code'
+import type { EngineInterface, Register, Timer, TurnStepChunk } from 'claude-code'
 
 const PANE = 'live-action'
 const STATUS_WIDTH = 100
@@ -9,16 +9,23 @@ const TURN_HOLD_MS = 600_000
 // Cells the engine draws before the message: the spinner mark and the "full-focus-view plugin " attribution.
 const SPINNER_CHROME_CELLS = 26
 
+// A model request: the output tokens it generated, shown on every tool call it issued.
+type Step = { output?: number }
+// A subagent's tokens so far: its latest request's context plus everything it has generated.
+type Usage = { context: number; output: number }
 type Call = {
   tool: string
   input: Record<string, unknown>
   startedAt: number
   seq: number
   isSubagent: boolean
+  step?: Step
+  usage?: Usage
 }
 type Item = {
   label: string
   summary: string
+  tokens?: string
   description?: string
   body?: string
   language?: string
@@ -29,6 +36,8 @@ type Item = {
 
 let launches = 0
 const calls = new Map<string, Call>()
+const steps = new Map<string, Step>()
+const agentUsage = new Map<string, Usage>()
 const backgrounds = new Map<string, Call>()
 let last: (Call & { endedAt: number }) | undefined
 let isTurn = false
@@ -53,6 +62,36 @@ const headline = (input: Record<string, unknown>) =>
 
 const seconds = (ms: number) => `${Math.round(ms / 1000)}s`
 
+const count = (n: number) => (n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`)
+
+const usageOf = (agentId: string) => {
+  const usage = agentUsage.get(agentId) ?? { context: 0, output: 0 }
+  agentUsage.set(agentId, usage)
+  return usage
+}
+
+// Tokens are only counted by a request's stop chunk, so each call and subagent is charged from it.
+const tally = (step: Step, agentId: string | undefined, chunk: TurnStepChunk) => {
+  if (chunk.kind === 'tool') {
+    steps.set(chunk.id, step)
+  } else if (chunk.kind === 'stop' && chunk.usage) {
+    const { input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens } = chunk.usage
+    step.output = output_tokens
+    if (agentId !== undefined) {
+      const usage = usageOf(agentId)
+      usage.context = input_tokens + cache_creation_input_tokens + cache_read_input_tokens
+      usage.output += output_tokens
+    }
+  }
+}
+
+// An agent shows its own requests' total; any other call, the output of the request that issued it.
+const tokenText = ({ tool, usage, step }: Call) => {
+  if (usage) return usage.context + usage.output > 0 ? `${count(usage.context + usage.output)} tok` : undefined
+  if (tool === 'Agent' || step?.output === undefined) return undefined
+  return `${count(step.output)} out`
+}
+
 const clock = ({ startedAt, endedAt }: Item) =>
   endedAt === undefined ? seconds(Date.now() - startedAt) : `done ${seconds(Date.now() - endedAt)} ago`
 
@@ -74,6 +113,7 @@ const callItem = (call: Call & { endedAt?: number }, isBackground: boolean): Ite
   return {
     label: `${isBackground ? '⏳ ' : ''}${call.tool}${call.isSubagent ? ' (subagent)' : ''}`,
     summary: headline(call.input),
+    tokens: tokenText(call),
     description: typeof description === 'string' ? description : undefined,
     body: shell ?? JSON.stringify(call.input, null, 2),
     language: shell === undefined ? 'json' : 'bash',
@@ -93,8 +133,10 @@ const active = (): Item[] => {
   return items.length === 0 && last && isHeld ? [callItem(last, false)] : items
 }
 
+const tokenSuffix = ({ tokens }: Item) => (tokens ? ` · ${tokens}` : '')
+
 const itemText = (item: Item) =>
-  `${item.endedAt === undefined ? '▶' : '✓'} ${item.label} ${clock(item)} · ${item.summary}`
+  `${item.endedAt === undefined ? '▶' : '✓'} ${item.label} ${clock(item)}${tokenSuffix(item)} · ${item.summary}`
 
 const compactingText = () =>
   compactingSince === undefined ? undefined : `Compacting conversation · ${seconds(Date.now() - compactingSince)}`
@@ -153,7 +195,9 @@ export const register: Register = on => {
       startedAt: Date.now(),
       seq: launches++,
       isSubagent: e.agentId !== undefined,
+      step: steps.get(e.tool_use_id),
     }
+    steps.delete(e.tool_use_id)
     isIdle = false
     calls.set(e.tool_use_id, call)
     refresh($)
@@ -170,6 +214,25 @@ export const register: Register = on => {
       refresh($)
     }
   }).catch(($, e, next) => next(e))
+
+  // The Agent call learns its subagent's id here; a workflow's many agents share one call, so they are skipped.
+  on('agent.spawn', async ($, e, next) => {
+    const spawned = await next(e)
+    const call = calls.get(e.tool_use_id)
+    if (call && spawned.agentId && !e.workflow) call.usage = usageOf(spawned.agentId)
+    return spawned
+  }).catch(($, e, next) => next(e))
+
+  on('turn.step', async function* ($, e, next) {
+    const step: Step = {}
+    for await (const chunk of next(e)) {
+      // Counting is best effort: a failure here must not cut the response short.
+      try {
+        tally(step, e.agentId, chunk)
+      } catch {}
+      yield chunk
+    }
+  })
 
   // A finished background task comes back as a notification prompt naming its id.
   on('prompt.submit', ($, e, next) => {
@@ -242,7 +305,7 @@ export const register: Register = on => {
       <Box flexDirection="column">
         {head ? (
           <Text bold size="title">
-            {head.endedAt === undefined ? '▶' : '✓'} {head.label} · {clock(head)}
+            {head.endedAt === undefined ? '▶' : '✓'} {head.label} · {clock(head)}{tokenSuffix(head)}
           </Text>
         ) : (
           <Text dimColor size="heading">Nothing running.</Text>
@@ -256,7 +319,7 @@ export const register: Register = on => {
         ) : null}
         {rest.map(item => (
           <Text dimColor>
-            ▷ {item.label} {clock(item)} · {item.summary}
+            ▷ {item.label} {clock(item)}{tokenSuffix(item)} · {item.summary}
           </Text>
         ))}
       </Box>
