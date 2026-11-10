@@ -68,7 +68,7 @@ const backgroundId = (result: unknown) => {
   return r?.status === 'async_launched' && typeof r.agentId === 'string' ? r.agentId : undefined
 }
 
-const callItem = (call: Call, isBackground: boolean): Item => {
+const callItem = (call: Call & { endedAt?: number }, isBackground: boolean): Item => {
   const { command, description } = call.input
   const shell = call.tool === 'Bash' && typeof command === 'string' ? command : undefined
   return {
@@ -105,7 +105,7 @@ const statusText = (items: Item[], lead?: string) => [lead, ...items.map(itemTex
 const isWrapped = (text: string, columns?: number) => columns !== undefined && SPINNER_CHROME_CELLS + text.length > columns
 
 const forgetTasks = (text: string) => {
-  for (const [, id] of text.matchAll(/<task-id>([^<]+)<\/task-id>/g)) backgrounds.delete(id)
+  for (const [, id] of text.matchAll(/<task-id>([^<]+)<\/task-id>/g)) if (id) backgrounds.delete(id)
 }
 
 const refresh = ($: EngineInterface) => {
