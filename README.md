@@ -3,7 +3,8 @@
 A Claude Code mod (plugin name `full-focus-view`) that sits between the Focus view and the standard view: it shows the latest running tool, background task or subagent call in full, without opening the full transcript.
 
 - **Status line** while something runs or has just run, one entry for every running call and background task, latest start first: `▶ Bash 12s · <description or command> │ ⏳ Agent 340s · <description>`. The last finished call stays as `✓ … done 4s ago` through the turn, so a chain of quick calls does not flash and vanish.
-- **During a turn** the same line replaces the engine's spinner message.
+- **During a turn** the same line replaces the engine's spinner message. While the model is thinking, requesting or responding, the engine's own word leads it (`Sauteing │ ⏳ Agent 340s · <description>`); while a tool call runs, the call's entry does.
+- **Compaction** shows as `Compacting conversation · 12s` at the start of the spinner line, and in the status line when no turn is running (`/compact`).
 - **`/live`** toggles a pane with the latest-started item in full (command or input, description, elapsed time) and one line for each other running item.
 - **Background Bash and Agent launches** show as `⏳` until their task notification arrives (an agent's notification delivered mid-turn is read from the message queue).
 

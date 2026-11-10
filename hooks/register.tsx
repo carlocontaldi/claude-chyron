@@ -31,6 +31,7 @@ const backgrounds = new Map<string, Call>()
 let last: (Call & { endedAt: number }) | undefined
 let isTurn = false
 let isIdle = false
+let compactingSince: number | undefined
 let ticker: Timer | undefined
 let isOpen = false
 
@@ -93,7 +94,10 @@ const active = (): Item[] => {
 const itemText = (item: Item) =>
   `${item.endedAt === undefined ? '▶' : '✓'} ${item.label} ${clock(item)} · ${item.summary}`
 
-const statusText = (items: Item[]) => items.map(itemText).join(' │ ')
+const compactingText = () =>
+  compactingSince === undefined ? undefined : `Compacting conversation · ${seconds(Date.now() - compactingSince)}`
+
+const statusText = (items: Item[], lead?: string) => [lead, ...items.map(itemText)].filter(Boolean).join(' │ ')
 
 const forgetTasks = (text: string) => {
   for (const [, id] of text.matchAll(/<task-id>([^<]+)<\/task-id>/g)) backgrounds.delete(id)
@@ -101,10 +105,11 @@ const forgetTasks = (text: string) => {
 
 const refresh = ($: EngineInterface) => {
   const items = active()
+  const isBusy = items.length > 0 || compactingSince !== undefined
   // During a turn the spinner already shows this line; the status line is for what outlives it.
-  $.ui.status(items.length > 0 && !isTurn ? statusText(items) : undefined)
+  $.ui.status(isBusy && !isTurn ? statusText(items, compactingText()) : undefined)
   $.ui.invalidate('ui.render')
-  if (items.length > 0) {
+  if (isBusy) {
     ticker ??= $.clock.every(TICK_MS, () => refresh($))
   } else {
     ticker?.cancel()
@@ -197,11 +202,27 @@ export const register: Register = on => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
+  on('session.compact', async ($, e, next) => {
+    if (e.agentId !== undefined || e.trigger === 'precompute') return next(e)
+    compactingSince = Date.now()
+    refresh($)
+    try {
+      return await next(e)
+    } finally {
+      compactingSince = undefined
+      refresh($)
+    }
+  }).catch(($, e, next) => next(e))
+
   // A tree is drawn in a plugin card flush against the last chat row; a rewritten message keeps the engine's own row.
   on('ui.render', { component: 'Spinner' }, ($, e, next) => {
     const items = active()
-    if (items.length === 0) return next(e)
-    return next({ ...e, props: { ...e.props, message: statusText(items), suffix: '' } })
+    const compacting = compactingText()
+    if (items.length === 0 && !compacting) return next(e)
+    // Keep the engine's own word (thinking, requesting, ...) first, unless a tool call is the thing running.
+    const { message, word, mode } = e.props
+    const lead = compacting ?? (mode === 'tool-use' ? undefined : (message ?? word))
+    return next({ ...e, props: { ...e.props, message: statusText(items, lead), suffix: '' } })
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, ($, e) => {

@@ -63,3 +63,47 @@ test('an agent notification delivered into a running turn clears the agent', asy
   await ui.unmount()
   expect(drawn.replace(/\d+s/g, 'Ns')).toBe('✓ Agent done Ns ago · digest')
 })
+
+test('while the model thinks, its own word leads the background items', async ($, on) => {
+  let drawn = ''
+  on('ui.render', ($, e) => {
+    drawn = String(e.props.message)
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('tool.call', () => ({ result: { status: 'async_launched', agentId: 'a1' } }))
+  await $.tool.call({ tool: 'Agent', description: 'digest', prompt: 'p' })
+
+  const ui = await $.ui.mount({ ...SPINNER, props: { ...SPINNER.props, mode: 'thinking' } })
+  await ui.unmount()
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('Working │ ▶ ⏳ Agent Ns · digest')
+})
+
+const SUMMARY = { role: 'user', text: 'summary', toolUses: [] } as const
+
+test('the spinner says Compacting while a compaction runs, then goes back to the engine', async ($, on) => {
+  let drawn: unknown
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  on('ui.render', ($, e) => {
+    drawn = e.props.message
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('session.compact', async () => {
+    await gate
+    return { messages: [SUMMARY] }
+  })
+
+  const compacting = $.session.compact({ trigger: 'plugin', messages: [SUMMARY] })
+  await pause()
+  let ui = await $.ui.mount({ ...SPINNER, props: { ...SPINNER.props, mode: 'requesting' } })
+  await ui.unmount()
+  expect(String(drawn).replace(/\d+s/g, 'Ns')).toBe('Compacting conversation · Ns')
+
+  release()
+  await compacting
+  ui = await $.ui.mount(SPINNER)
+  await ui.unmount()
+  expect(drawn).toBeNull()
+})
