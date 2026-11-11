@@ -1,7 +1,7 @@
 {
   "name": "full-focus-view",
   "version": "0.1.6",
-  "description": "Shows the latest running tool in the status line, and in full in a pane opened with /live.",
+  "description": "Shows the latest running tool, background task or subagent call in the status line.",
   "author": { "name": "Carlo Contaldi" },
   "license": "MIT",
   "icon": "./.claude-plugin/icon.png"

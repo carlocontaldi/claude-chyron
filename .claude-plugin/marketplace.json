@@ -1,6 +1,6 @@
 {
   "name": "claude-full-focus-view",
   "owner": { "name": "Carlo Contaldi" },
-  "metadata": { "description": "A Claude Code mod that shows the latest running tool, background task or subagent call in full." },
+  "metadata": { "description": "A Claude Code mod that shows the latest running tool, background task or subagent call in the status line." },
   "plugins": [{ "name": "full-focus-view", "source": "./" }]
 }

@@ -1,8 +1,15 @@
 import type { EngineInterface, Register, Timer, TurnStepChunk } from 'claude-code'
 
-const PANE = 'live-action'
-const STATUS_WIDTH = 100
-const BODY_LIMIT = 3000
+const STATUS_WIDTH = 120
+const SUMMARY_LIMIT = 600
+// VS Code's status line: 0.9x text across the prompt box's width (the viewport the panel reports), clamped to two
+// rows, with the panel's "full-focus-view plugin " first. Characters per reported column is a fitted estimate.
+const STATUS_ROWS = 2
+const STATUS_CHARS_PER_COLUMN = 1.7
+const STATUS_FILL = 0.95
+const STATUS_PREFIX_CHARS = 24
+const STATUS_FALLBACK_COLUMNS = 64
+const MIN_SUMMARY_CHARS = 10
 const TICK_MS = 1000
 const HOLD_MS = 30_000
 const TURN_HOLD_MS = 600_000
@@ -24,11 +31,10 @@ type Call = {
 }
 type Item = {
   label: string
+  name: string
+  isBackground: boolean
   summary: string
   tokens?: string
-  description?: string
-  body?: string
-  language?: string
   startedAt: number
   seq: number
   endedAt?: number
@@ -44,7 +50,8 @@ let isTurn = false
 let isIdle = false
 let compactingSince: number | undefined
 let ticker: Timer | undefined
-let isOpen = false
+let isVscode = false
+let statusColumns: number | undefined
 
 const oneLine = (text: string, width: number) => {
   const line = text.replace(/\s+/g, ' ').trim()
@@ -57,7 +64,7 @@ const headline = (input: Record<string, unknown>) =>
       input.description ?? input.command ?? input.file_path ?? input.pattern ?? input.url ??
         input.query ?? input.prompt ?? '',
     ),
-    STATUS_WIDTH,
+    SUMMARY_LIMIT,
   )
 
 const seconds = (ms: number) => `${Math.round(ms / 1000)}s`
@@ -108,15 +115,13 @@ const backgroundId = (result: unknown) => {
 }
 
 const callItem = (call: Call & { endedAt?: number }, isBackground: boolean): Item => {
-  const { command, description } = call.input
-  const shell = call.tool === 'Bash' && typeof command === 'string' ? command : undefined
+  const name = `${call.tool}${call.isSubagent ? ' (subagent)' : ''}`
   return {
-    label: `${isBackground ? '⏳ ' : ''}${call.tool}${call.isSubagent ? ' (subagent)' : ''}`,
+    label: `${isBackground ? '⏳ ' : ''}${name}`,
+    name,
+    isBackground,
     summary: headline(call.input),
     tokens: tokenText(call),
-    description: typeof description === 'string' ? description : undefined,
-    body: shell ?? JSON.stringify(call.input, null, 2),
-    language: shell === undefined ? 'json' : 'bash',
     startedAt: call.startedAt,
     seq: call.seq,
     endedAt: call.endedAt,
@@ -133,10 +138,14 @@ const active = (): Item[] => {
   return items.length === 0 && last && isHeld ? [callItem(last, false)] : items
 }
 
-const tokenSuffix = ({ tokens }: Item) => (tokens ? ` · ${tokens}` : '')
-
 const itemText = (item: Item) =>
-  `${item.endedAt === undefined ? '▶' : '✓'} ${item.label} ${clock(item)}${tokenSuffix(item)} · ${item.summary}`
+  [
+    `${item.endedAt === undefined ? '▶' : '✓'} ${item.label} ${clock(item)}`,
+    item.summary && oneLine(item.summary, STATUS_WIDTH),
+    item.tokens,
+  ]
+    .filter(Boolean)
+    .join(' · ')
 
 const compactingText = () =>
   compactingSince === undefined ? undefined : `Compacting conversation · ${seconds(Date.now() - compactingSince)}`
@@ -146,6 +155,43 @@ const statusText = (items: Item[], lead?: string) => [lead, ...items.map(itemTex
 // A hook cannot measure text; estimate the wrap from the viewport width in cells.
 const isWrapped = (text: string, columns?: number) => columns !== undefined && SPINNER_CHROME_CELLS + text.length > columns
 
+// Room for each summary: an equal share of what is left, where a shorter summary hands its spare to the others.
+const summaryShares = (lengths: number[], room: number) => {
+  const shares = lengths.map(() => 0)
+  let left = room
+  const order = lengths.map((_, index) => index).sort((a, b) => (lengths[a] ?? 0) - (lengths[b] ?? 0))
+  order.forEach((index, turn) => {
+    const share = Math.max(MIN_SUMMARY_CHARS, Math.floor(left / (order.length - turn)))
+    shares[index] = Math.min(lengths[index] ?? 0, share)
+    left -= shares[index] ?? 0
+  })
+  return shares
+}
+
+// VS Code's status line is plain grey text: coloured emoji mark the state and tool names are upper case. The summaries
+// share the room the two rows have left after the fixed parts, so the rows are filled and nothing is cut early.
+const stripText = (items: Item[], lead?: string, columns = STATUS_FALLBACK_COLUMNS) => {
+  const heads = items.map(item => {
+    const state = item.isBackground ? '⏳' : item.endedAt === undefined ? '🟠' : '🟢'
+    return `${state} ${item.name.toUpperCase()} ${clock(item)}`
+  })
+  const leadText = lead && `🟠 ${lead}`
+  const fixedOf = (item: Item, head: string) =>
+    head.length + (item.summary ? 3 : 0) + (item.tokens ? 3 + item.tokens.length : 0)
+  const separators = 3 * Math.max(0, items.length - (leadText ? 0 : 1))
+  const fixed = (leadText?.length ?? 0) + separators + items.reduce((sum, item, index) => sum + fixedOf(item, heads[index] ?? ''), 0)
+  const capacity = Math.floor(columns * STATUS_CHARS_PER_COLUMN * STATUS_ROWS * STATUS_FILL) - STATUS_PREFIX_CHARS
+  const shares = summaryShares(items.map(item => item.summary.length), capacity - fixed)
+  return [
+    leadText,
+    ...items.map((item, index) =>
+      [heads[index], item.summary && oneLine(item.summary, shares[index] ?? 0), item.tokens].filter(Boolean).join(' · '),
+    ),
+  ]
+    .filter(Boolean)
+    .join(' ┃ ')
+}
+
 const forgetTasks = (text: string) => {
   for (const [, id] of text.matchAll(/<task-id>([^<]+)<\/task-id>/g)) if (id) backgrounds.delete(id)
 }
@@ -153,8 +199,9 @@ const forgetTasks = (text: string) => {
 const refresh = ($: EngineInterface) => {
   const items = active()
   const isBusy = items.length > 0 || compactingSince !== undefined
-  // During a turn the spinner already shows this line; the status line is for what outlives it.
-  $.ui.status(isBusy && !isTurn ? statusText(items, compactingText()) : undefined)
+  // The terminal's spinner shows this line during a turn; VS Code's is untouched, so its status line shows it.
+  const text = isVscode ? stripText(items, compactingText(), statusColumns) : statusText(items, compactingText())
+  $.ui.status(isBusy && (!isTurn || isVscode) ? text : undefined)
   $.ui.invalidate('ui.render')
   if (isBusy) {
     ticker ??= $.clock.every(TICK_MS, () => refresh($))
@@ -165,29 +212,6 @@ const refresh = ($: EngineInterface) => {
 }
 
 export const register: Register = on => {
-  on('session.start', async ($, e, next) => {
-    await $.command.register({
-      name: 'live',
-      description: 'Toggle the pane showing the running action in full',
-    })
-    return next(e)
-  })
-
-  on('command.run', { command: 'live' }, async $ => {
-    if (isOpen) {
-      await $.ui.close({ id: PANE })
-      return { text: 'Live pane closed.' }
-    }
-    const { isPlaced } = await $.ui.open({ id: PANE, title: 'Live action' })
-    isOpen = true
-    return { text: isPlaced ? 'Live pane opened.' : 'Live pane opened but not drawn here.' }
-  })
-
-  on('ui.close', ($, e, next) => {
-    if (e.id === PANE) isOpen = false
-    return next(e)
-  }).catch(($, e, next) => next(e))
-
   on('tool.call', async ($, e, next) => {
     const call: Call = {
       tool: e.tool,
@@ -282,47 +306,23 @@ export const register: Register = on => {
     }
   }).catch(($, e, next) => next(e))
 
-  // A rewritten message keeps the engine's own row; a wrapped one gets a margin so it clears the chat row above.
+  // VS Code keeps the engine's own spinner and shows the detail in the status line. Elsewhere one row rewrites the
+  // engine's message, and a wrapped text goes in a card under the engine row.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
     const items = active()
     const compacting = compactingText()
-    if (items.length === 0 && !compacting) return next(e)
+    if (e.surface === 'vscode') {
+      isVscode = true
+      statusColumns = e.viewport?.columns
+    }
+    if (e.surface === 'vscode' || (items.length === 0 && !compacting)) return next(e)
     // Keep the engine's own word (thinking, requesting, ...) first, unless a tool call is the thing running.
     const { message, word, mode } = e.props
     const lead = compacting ?? (mode === 'tool-use' ? undefined : (message ?? word))
     const text = statusText(items, lead)
-    const row = await next({ ...e, props: { ...e.props, message: text, suffix: '' } })
-    if (!isWrapped(text, e.viewport?.columns)) return row
-    const { Box } = $.ui.resolve(e)
-    return <Box marginTop={1}>{row}</Box>
-  })
-
-  on('ui.render', { component: 'Pane', requestId: PANE }, ($, e) => {
-    const { Box, Text, Code } = $.ui.resolve(e)
-    const [head, ...rest] = active()
-
-    return (
-      <Box flexDirection="column">
-        {head ? (
-          <Text bold size="title">
-            {head.endedAt === undefined ? '▶' : '✓'} {head.label} · {clock(head)}{tokenSuffix(head)}
-          </Text>
-        ) : (
-          <Text dimColor size="heading">Nothing running.</Text>
-        )}
-        {head?.description ? <Text dimColor size="heading">{head.description}</Text> : null}
-        {head?.body ? (
-          <Code
-            source={head.body.length > BODY_LIMIT ? `${head.body.slice(0, BODY_LIMIT)}…` : head.body}
-            language={head.language}
-          />
-        ) : null}
-        {rest.map(item => (
-          <Text dimColor>
-            ▷ {item.label} {clock(item)}{tokenSuffix(item)} · {item.summary}
-          </Text>
-        ))}
-      </Box>
-    )
+    if (!isWrapped(text, e.viewport?.columns)) return next({ ...e, props: { ...e.props, message: text, suffix: '' } })
+    const { Box, Text } = $.ui.resolve(e)
+    const row = await next(e)
+    return <Box flexDirection="column">{row}<Text>{statusText(items, compacting)}</Text></Box>
   })
 }

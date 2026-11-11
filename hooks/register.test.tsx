@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 const SPINNER = {
   plugin: 'full-focus-view',
   component: 'Spinner',
-  surface: 'vscode',
+  surface: 'terminal',
   props: { word: 'Working', message: null, suffix: '…', mode: 'tool-use' },
 } as const
 
@@ -79,7 +79,37 @@ test('while the model thinks, its own word leads the background items', async ($
   expect(drawn.replace(/\d+s/g, 'Ns')).toBe('Working │ ▶ ⏳ Agent Ns · digest')
 })
 
-test('a spinner text too long for the viewport gets a margin above it, a short one does not', async ($, on) => {
+test('a spinner text too long for the viewport goes in a card under the engine row, a short one rewrites the message', async ($, on) => {
+  let message: unknown
+  on('ui.render', ($, e) => {
+    message = e.props.message
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('tool.call', () => ({ result: {} }))
+  await $.tool.call({ tool: 'Bash', command: 'make', description: 'build the whole project' })
+
+  const drawnAt = async (columns: number) => {
+    const ui = await $.ui.mount({ ...SPINNER, viewport: { columns, rows: 40 } })
+    const card = await ui.find({ type: 'Box' })
+    await ui.unmount()
+    return { card, message }
+  }
+  const wide = await drawnAt(200)
+  expect(wide.card).toBeUndefined()
+  expect(String(wide.message).replace(/\d+s/g, 'Ns')).toBe('✓ Bash done Ns ago · build the whole project')
+
+  const narrow = await drawnAt(40)
+  expect(narrow.message).toBeNull()
+  expect(narrow.card?.text.replace(/\d+s/g, 'Ns')).toBe('engine✓ Bash done Ns ago · build the whole project')
+})
+
+// The engine refuses a drawing that holds its own node under a Box with one of these props, and skips the hook.
+const REFUSED_ABOVE_ENGINE_ROW = [
+  'display', 'overflow', 'position', 'width', 'height', 'minWidth', 'minHeight', 'top', 'left', 'right', 'bottom',
+]
+
+test('a wrapped spinner keeps sizing and positioning props off every Box above the engine row', async ($, on) => {
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine</Text>
@@ -87,17 +117,123 @@ test('a spinner text too long for the viewport gets a margin above it, a short o
   on('tool.call', () => ({ result: {} }))
   await $.tool.call({ tool: 'Bash', command: 'make', description: 'build the whole project' })
 
-  const marginAt = async (columns: number) => {
-    const ui = await $.ui.mount({ ...SPINNER, viewport: { columns, rows: 40 } })
-    const box = await ui.find({ type: 'Box' })
-    await ui.unmount()
-    return box?.props?.marginTop
+  const ui = await $.ui.mount({ ...SPINNER, viewport: { columns: 40, rows: 40 } })
+  const boxes = (await ui.findAll({ type: 'Box' })).filter(box => box.text.includes('engine'))
+  await ui.unmount()
+  expect(boxes.length).toBeGreaterThan(0)
+  for (const box of boxes) {
+    expect(Object.keys(box.props ?? {}).filter(prop => REFUSED_ABOVE_ENGINE_ROW.includes(prop))).toEqual([])
   }
-  expect(await marginAt(200)).toBeUndefined()
-  expect(await marginAt(40)).toBe(1)
 })
 
 const SUMMARY = { role: 'user', text: 'summary', toolUses: [] } as const
+
+test('on VS Code the spinner stays the engine\'s own, with its word unchanged', async ($, on) => {
+  let seen: unknown
+  on('ui.render', ($, e) => {
+    seen = e.props.message
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('tool.call', () => ({ result: {} }))
+  await $.tool.call({ tool: 'Bash', command: 'make', description: 'build the whole project' })
+
+  const ui = await $.ui.mount({ ...SPINNER, surface: 'vscode' })
+  const boxes = await ui.findAll({ type: 'Box' })
+  await ui.unmount()
+  expect(seen).toBeNull()
+  expect(boxes).toEqual([])
+})
+
+test('once a VS Code spinner has drawn, the status line carries the running items', async ($, on) => {
+  let status: string | undefined
+  on('ui.status', ($, e) => {
+    status = e.text
+    return { value: undefined }
+  })
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('tool.call', () => ({ result: {} }))
+  const ui = await $.ui.mount({ ...SPINNER, surface: 'vscode' })
+  await ui.unmount()
+  await $.tool.call({ tool: 'Bash', command: 'make', description: 'build the whole project' })
+
+  expect(status?.replace(/\d+s/g, 'Ns')).toBe('🟢 BASH done Ns ago · build the whole project')
+})
+
+test('on VS Code the status line keeps the running items while a turn is in progress', async ($, on) => {
+  let status: string | undefined
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  on('ui.status', ($, e) => {
+    status = e.text
+    return { value: undefined }
+  })
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('tool.call', async () => {
+    await gate
+    return { result: {} }
+  })
+  on('turn.start', () => ({ turnId: 't1' }))
+  const ui = await $.ui.mount({ ...SPINNER, surface: 'vscode' })
+  await ui.unmount()
+
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  const running = $.tool.call({ tool: 'Bash', command: 'make', description: 'build the whole project' })
+  await pause()
+
+  expect(status?.replace(/\d+s/g, 'Ns')).toBe('🟠 BASH Ns · build the whole project')
+
+  release()
+  await running
+})
+
+test('on VS Code a compaction shows in the status line', async ($, on) => {
+  let status: string | undefined
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  on('ui.status', ($, e) => {
+    status = e.text
+    return { value: undefined }
+  })
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('session.compact', async () => {
+    await gate
+    return { messages: [SUMMARY] }
+  })
+  const ui = await $.ui.mount({ ...SPINNER, surface: 'vscode' })
+  await ui.unmount()
+
+  const compacting = $.session.compact({ trigger: 'plugin', messages: [SUMMARY] })
+  await pause()
+  expect(status?.replace(/\d+s/g, 'Ns')).toBe('🟠 Compacting conversation · Ns')
+
+  release()
+  await compacting
+})
+
+test('on the terminal the text stays under a wrapped engine row', async ($, on) => {
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('tool.call', () => ({ result: {} }))
+  await $.tool.call({ tool: 'Bash', command: 'make', description: 'build the whole project' })
+
+  const ui = await $.ui.mount({ ...SPINNER, viewport: { columns: 40, rows: 40 } })
+  const boxes = await ui.findAll({ type: 'Box' })
+  await ui.unmount()
+  expect(boxes.find(box => box.props?.flexWrap === 'wrap')).toBeUndefined()
+  expect(boxes[0]?.props.flexDirection).toBe('column')
+})
 
 test('the spinner says Compacting while a compaction runs, then goes back to the engine', async ($, on) => {
   let drawn: unknown
@@ -173,7 +309,7 @@ test('a running call shows the output tokens of the request that issued it, not 
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Bash Ns · 1.5k out · test │ ▶ Bash Ns · 1.5k out · build')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Bash Ns · test · 1.5k out │ ▶ Bash Ns · build · 1.5k out')
 
   release()
   await Promise.all([first, second])
@@ -222,7 +358,7 @@ test('an agent shows its own requests: the latest context plus everything it gen
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Agent Ns · 22.5k tok · digest')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Agent Ns · digest · 22.5k tok')
 
   release()
   await running
@@ -259,7 +395,7 @@ test('an Agent issued in the same request neither dilutes a sibling call nor sho
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Bash Ns · 1.5k out · test │ ▶ Agent Ns · digest')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Bash Ns · test · 1.5k out │ ▶ Agent Ns · digest')
 
   release()
   await Promise.all([agent, bash])
@@ -293,7 +429,7 @@ test('a background agent keeps counting its requests after its launch returned',
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ ⏳ Agent Ns · 20.4k tok · digest')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ ⏳ Agent Ns · digest · 20.4k tok')
 })
 
 test("a subagent's tool call shows the output tokens of the subagent's request", async ($, on) => {
@@ -321,47 +457,97 @@ test("a subagent's tool call shows the output tokens of the subagent's request",
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Bash (subagent) Ns · 300 out · list')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Bash (subagent) Ns · list · 300 out')
 
   release()
   await running
 })
 
-const PANE = {
-  plugin: 'full-focus-view',
-  component: 'Pane',
-  requestId: 'live-action',
-  surface: 'vscode',
-  props: { title: 'Live action', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
-} as const
-
-test('the /live pane shows the token count on its head and on every other item', async ($, on) => {
+test('the VS Code status line gives each summary an equal share of what the two rows have left', async ($, on) => {
+  let status: string | undefined
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
-  on('turn.step', async function* (_, e) {
-    yield { kind: 'tool', index: 0, id: 'toolu_a', name: 'Bash' }
-    yield { kind: 'tool', index: 1, id: 'toolu_b', name: 'Bash' }
-    yield { kind: 'stop', stopReason: 'tool_use', usage: usage(1500) }
-    return answer(e)
+  on('ui.status', ($, e) => {
+    status = e.text
+    return { value: undefined }
+  })
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
   })
   on('tool.call', async () => {
     await gate
     return { result: {} }
   })
-
-  await drain($.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 }))
-  const first = $.tool.call({ tool: 'Bash', command: 'make', description: 'build', tool_use_id: 'toolu_a' })
-  await pause()
-  const second = $.tool.call({ tool: 'Bash', command: 'make test', description: 'test', tool_use_id: 'toolu_b' })
-  await pause()
-
-  const ui = await $.ui.mount(PANE)
-  const head = await ui.find({ type: 'Text', text: /▶ Bash/ })
-  const rest = await ui.find({ type: 'Text', text: /▷ Bash/ })
+  const ui = await $.ui.mount({ ...SPINNER, surface: 'vscode' })
   await ui.unmount()
-  expect(head?.text.replace(/\d+s/g, 'Ns')).toBe('▶ Bash · Ns · 1.5k out')
-  expect(rest?.text.replace(/\d+s/g, 'Ns')).toBe('▷ Bash Ns · 1.5k out · build')
+
+  const first = $.tool.call({ tool: 'Bash', command: 'a', description: 'a'.repeat(300) })
+  await pause()
+  const second = $.tool.call({ tool: 'Bash', command: 'b', description: 'b'.repeat(300) })
+  await pause()
+
+  // Two rows of 64 reported columns hold 64 * 1.7 * 2 * 0.95 = 206 characters, 24 of them the panel's prefix.
+  // The two heads and their separator take 29, which leaves 153 to share: 76 and 77.
+  const text = status?.replace(/\d+s/g, 'Ns')
+  expect(text).toBe(`🟠 BASH Ns · ${'b'.repeat(75)}… ┃ 🟠 BASH Ns · ${'a'.repeat(76)}…`)
+  expect(text?.length).toBe(206 - 24)
 
   release()
   await Promise.all([first, second])
+})
+
+test('a short summary hands its spare room to the long one', async ($, on) => {
+  let status: string | undefined
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  on('ui.status', ($, e) => {
+    status = e.text
+    return { value: undefined }
+  })
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('tool.call', async () => {
+    await gate
+    return { result: {} }
+  })
+  const ui = await $.ui.mount({ ...SPINNER, surface: 'vscode' })
+  await ui.unmount()
+
+  const first = $.tool.call({ tool: 'Bash', command: 's', description: 'short' })
+  await pause()
+  const second = $.tool.call({ tool: 'Bash', command: 'l', description: 'l'.repeat(300) })
+  await pause()
+
+  expect(status?.replace(/\d+s/g, 'Ns')).toBe(`🟠 BASH Ns · ${'l'.repeat(147)}… ┃ 🟠 BASH Ns · short`)
+
+  release()
+  await Promise.all([first, second])
+})
+
+test('the VS Code status line puts the token count after the summary', async ($, on) => {
+  let status: string | undefined
+  on('ui.status', ($, e) => {
+    status = e.text
+    return { value: undefined }
+  })
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('turn.step', async function* (_, e) {
+    yield { kind: 'tool', index: 0, id: 'toolu_a', name: 'Bash' }
+    yield { kind: 'stop', stopReason: 'tool_use', usage: usage(1500) }
+    return answer(e)
+  })
+  on('tool.call', () => ({ result: {} }))
+  const ui = await $.ui.mount({ ...SPINNER, surface: 'vscode' })
+  await ui.unmount()
+
+  await drain($.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 }))
+  await $.tool.call({ tool: 'Bash', command: 'make', description: 'build', tool_use_id: 'toolu_a' })
+
+  expect(status?.replace(/\d+s/g, 'Ns')).toBe('🟢 BASH done Ns ago · build · 1.5k out')
 })
