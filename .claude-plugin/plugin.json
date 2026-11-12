@@ -1,8 +1,10 @@
 {
   "name": "chyron",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Shows the latest running tool, background task or subagent call in the status line. Token-free: no model calls.",
   "author": { "name": "Carlo Contaldi" },
   "license": "MIT",
+  "homepage": "https://github.com/carlocontaldi",
+  "repository": "https://github.com/carlocontaldi/claude-chyron",
   "icon": "./.claude-plugin/icon.png"
 }
