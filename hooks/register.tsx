@@ -62,7 +62,7 @@ const headline = (input: Record<string, unknown>) =>
   oneLine(
     String(
       input.description ?? input.command ?? input.file_path ?? input.pattern ?? input.url ??
-        input.query ?? input.prompt ?? '',
+        input.query ?? input.skill ?? input.prompt ?? '',
     ),
     SUMMARY_LIMIT,
   )

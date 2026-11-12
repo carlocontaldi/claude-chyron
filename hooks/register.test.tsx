@@ -47,6 +47,21 @@ test('the spinner lists every running item, latest start first', async ($, on) =
   await running
 })
 
+test('a Skill call shows the skill it loaded', async ($, on) => {
+  let drawn = ''
+  on('ui.render', ($, e) => {
+    drawn = String(e.props.message)
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('tool.call', () => ({ result: {} }))
+  await $.tool.call({ tool: 'Skill', skill: 'engineering:writing-code', args: 'ignored' })
+
+  const ui = await $.ui.mount(SPINNER)
+  await ui.unmount()
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('✓ Skill done Ns ago · engineering:writing-code')
+})
+
 test('an agent notification delivered into a running turn clears the agent', async ($, on) => {
   let drawn = ''
   on('ui.render', ($, e) => {
