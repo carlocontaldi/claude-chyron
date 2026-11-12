@@ -44,6 +44,7 @@ or set `CLAUDE_CODE_PLUGIN_DIRS=/path/to/claude-chyron` in the `env` block of `~
 
 ```
 claude plugin validate .
+claude plugin test .
 tsc -p .
 ```
 
