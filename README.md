@@ -1,6 +1,12 @@
 # Claude Chyron
 
-A Claude Code mod (plugin name `chyron`) that sits between the Focus view and the standard view: it shows the latest running tool, background task or subagent call, without opening the full transcript.
+> **chy·ron** · US /ˈkaɪrɑn/, UK /ˈkaɪrɒn/ (*KY-ron*) · *noun*, plural *chyrons*
+>
+> A line of text laid over the lower part of a video picture, such as the headline or the ticker that runs under a news broadcast.
+>
+> *After the Chyron Corporation, whose 1970s character generator drew such captions.*
+
+A chyron says what is happening without stopping the broadcast. Claude Chyron does the same for Claude Code: a mod (plugin name `chyron`) that sits between the Focus view and the standard view, showing the latest running tool, background task or subagent call without opening the full transcript.
 
 **Token-free.** It makes no model calls and passes every prompt, tool call and response through unchanged, so it adds nothing to the context and costs none of your usage. Even its token counts are read from the usage the engine already reports.
 
