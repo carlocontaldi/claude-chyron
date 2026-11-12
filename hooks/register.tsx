@@ -13,6 +13,9 @@ const MIN_SUMMARY_CHARS = 10
 const TICK_MS = 1000
 const HOLD_MS = 30_000
 const TURN_HOLD_MS = 600_000
+// A background task whose notification never comes (stopped from the UI, or lost) would show, and keep the ticker on, for good.
+const BACKGROUND_TTL_MS = 6 * 3_600_000
+const MAX_REMEMBERED = 256
 // Cells the engine draws before the message: the spinner mark and the "chyron plugin " attribution.
 const SPINNER_CHROME_CELLS = 17
 
@@ -58,14 +61,11 @@ const oneLine = (text: string, width: number) => {
   return line.length > width ? `${line.slice(0, width - 1)}…` : line
 }
 
-const headline = (input: Record<string, unknown>) =>
-  oneLine(
-    String(
-      input.description ?? input.command ?? input.file_path ?? input.pattern ?? input.url ??
-        input.query ?? input.skill ?? input.prompt ?? '',
-    ),
-    SUMMARY_LIMIT,
-  )
+// The first field that says something: an empty description must not hide the command.
+const headline = (input: Record<string, unknown>) => {
+  const fields = [input.description, input.command, input.file_path, input.pattern, input.url, input.query, input.skill, input.prompt]
+  return oneLine(String(fields.find(value => value != null && String(value).trim() !== '') ?? ''), SUMMARY_LIMIT)
+}
 
 const seconds = (ms: number) => `${Math.round(ms / 1000)}s`
 
@@ -78,16 +78,23 @@ const count = (n: number) => {
   return `${Math.ceil(n / 1_000_000)}M`
 }
 
+// Keeps the newest MAX_REMEMBERED entries: a call that never ran or an agent that never finished is not pruned elsewhere.
+const remember = <V,>(map: Map<string, V>, key: string, value: V) => {
+  map.delete(key)
+  map.set(key, value)
+  if (map.size > MAX_REMEMBERED) map.delete(map.keys().next().value as string)
+}
+
 const usageOf = (agentId: string) => {
   const usage = agentUsage.get(agentId) ?? { context: 0, output: 0 }
-  agentUsage.set(agentId, usage)
+  remember(agentUsage, agentId, usage)
   return usage
 }
 
 // Tokens are only counted by a request's stop chunk, so each call and subagent is charged from it.
 const tally = (step: Step, agentId: string | undefined, chunk: TurnStepChunk) => {
   if (chunk.kind === 'tool') {
-    steps.set(chunk.id, step)
+    remember(steps, chunk.id, step)
   } else if (chunk.kind === 'stop' && chunk.usage) {
     const { input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens } = chunk.usage
     step.output = output_tokens
@@ -135,8 +142,14 @@ const callItem = (call: Call & { endedAt?: number }, isBackground: boolean): Ite
   }
 }
 
+// A hook module cannot fake the clock in a test, so the expiry takes the time as an argument.
+export const dropExpired = (tasks: Map<string, { startedAt: number }>, now: number) => {
+  for (const [id, task] of tasks) if (now - task.startedAt > BACKGROUND_TTL_MS) tasks.delete(id)
+}
+
 // Running calls and background work, latest start first (`seq` orders calls that start in one millisecond).
 const active = (): Item[] => {
+  dropExpired(backgrounds, Date.now())
   const items = [
     ...[...calls.values()].map(call => callItem(call, false)),
     ...[...backgrounds.values()].map(call => callItem(call, true)),

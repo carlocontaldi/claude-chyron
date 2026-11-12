@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import { dropExpired } from './register'
 
 const SPINNER = {
   plugin: 'chyron',
@@ -596,4 +597,100 @@ test('the VS Code status line puts the token count after the summary', async ($,
   await $.tool.call({ tool: 'Bash', command: 'make', description: 'build', tool_use_id: 'toolu_a' })
 
   expect(status?.replace(/\d+s/g, 'Ns')).toBe('🟢 BASH done Ns ago · build ↓1.5k')
+})
+
+test('an empty description does not hide the command', async ($, on) => {
+  let drawn = ''
+  on('ui.render', ($, e) => {
+    drawn = String(e.props.message)
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('tool.call', () => ({ result: {} }))
+  await $.tool.call({ tool: 'Bash', command: 'make test', description: '' })
+
+  const ui = await $.ui.mount(SPINNER)
+  await ui.unmount()
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('✓ Bash done Ns ago · make test')
+})
+
+test('a background task whose notification never came is dropped after six hours', () => {
+  const hour = 3_600_000
+  const tasks = new Map([['old', { startedAt: 0 }], ['recent', { startedAt: 2 * hour }]])
+  dropExpired(tasks, 6 * hour)
+  expect([...tasks.keys()]).toEqual(['old', 'recent'])
+  dropExpired(tasks, 6 * hour + 1)
+  expect([...tasks.keys()]).toEqual(['recent'])
+  dropExpired(tasks, 8 * hour + 1)
+  expect(tasks.size).toBe(0)
+})
+
+test('the token counts of requests nobody claimed are forgotten once newer ones pile up', async ($, on) => {
+  let drawn = ''
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  on('ui.render', ($, e) => {
+    drawn = String(e.props.message)
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('turn.step', async function* (_, e) {
+    for (let index = 0; index < 300; index++) yield { kind: 'tool', index, id: `toolu_${index}`, name: 'Bash' }
+    yield { kind: 'stop', stopReason: 'tool_use', usage: usage(1500) }
+    return answer(e)
+  })
+  on('tool.call', async () => {
+    await gate
+    return { result: {} }
+  })
+
+  await drain($.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 }))
+  const oldest = $.tool.call({ tool: 'Bash', command: 'make', description: 'oldest', tool_use_id: 'toolu_0' })
+  await pause()
+  const newest = $.tool.call({ tool: 'Bash', command: 'make', description: 'newest', tool_use_id: 'toolu_299' })
+  await pause()
+
+  const ui = await $.ui.mount(SPINNER)
+  await ui.unmount()
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Bash Ns · newest ↓1.5k │ ▶ Bash Ns · oldest')
+
+  release()
+  await Promise.all([oldest, newest])
+})
+
+test('the totals of subagents that finished long ago are forgotten once newer ones pile up', async ($, on) => {
+  let drawn = ''
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  on('ui.render', ($, e) => {
+    drawn = String(e.props.message)
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('agent.spawn', (_, e) => ({ model: 'm', agentId: e.description === 'oldest' ? 'sub0' : 'sub299' }))
+  on('turn.step', async function* (_, e) {
+    yield { kind: 'stop', stopReason: 'tool_use', usage: usage(100, 1000) }
+    return answer(e)
+  })
+  on('tool.call', async () => {
+    await gate
+    return { result: {} }
+  })
+
+  for (let index = 0; index < 300; index++) {
+    await drain($.turn.step({ turnId: `t${index}`, index: 0, model: 'm', messageCount: 1, agentId: `sub${index}` }))
+  }
+  const oldest = $.tool.call({ tool: 'Agent', description: 'oldest', prompt: 'p', tool_use_id: 'toolu_a' })
+  await pause()
+  await $.agent.spawn({ prompt: 'p', description: 'oldest', tool_use_id: 'toolu_a' } as never)
+  const newest = $.tool.call({ tool: 'Agent', description: 'newest', prompt: 'p', tool_use_id: 'toolu_b' })
+  await pause()
+  await $.agent.spawn({ prompt: 'p', description: 'newest', tool_use_id: 'toolu_b' } as never)
+
+  const ui = await $.ui.mount(SPINNER)
+  await ui.unmount()
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Agent Ns · newest Σ1.1k │ ▶ Agent Ns · oldest')
+
+  release()
+  await Promise.all([oldest, newest])
 })
