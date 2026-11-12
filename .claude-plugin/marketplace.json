@@ -1,6 +1,6 @@
 {
   "name": "claude-chyron",
   "owner": { "name": "Carlo Contaldi" },
-  "metadata": { "description": "A Claude Code mod that shows the latest running tool, background task or subagent call in the status line." },
+  "metadata": { "description": "A token-free Claude Code mod that shows the latest running tool, background task or subagent call in the status line." },
   "plugins": [{ "name": "chyron", "source": "./" }]
 }
