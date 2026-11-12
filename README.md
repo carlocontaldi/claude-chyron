@@ -1,6 +1,6 @@
-# Claude Full Focus View
+# Claude Chyron
 
-A Claude Code mod (plugin name `full-focus-view`) that sits between the Focus view and the standard view: it shows the latest running tool, background task or subagent call, without opening the full transcript.
+A Claude Code mod (plugin name `chyron`) that sits between the Focus view and the standard view: it shows the latest running tool, background task or subagent call, without opening the full transcript.
 
 - **Status line** while something runs or has just run, one entry for every running call and background task, latest start first: `▶ Bash 12s · <description or command> │ ⏳ Agent 340s · <description>`. The last finished call stays as `✓ … done 4s ago` through the turn, so a chain of quick calls does not flash and vanish.
 - **During a turn** on the terminal the same line replaces the engine's spinner message. While the model is thinking, requesting or responding, the engine's own word leads it (`Sauteing │ ⏳ Agent 340s · <description>`); while a tool call runs, the call's entry does. On VS Code the spinner is the engine's own and the status line carries the entries all through the turn: a coloured emoji for the state (`🟠` running, `🟢` finished, `⏳` background), the tool name in capitals, then the time, the summary and last the token count, separated by `┃` between entries. The summaries share the room the two rows have left, an equal share each.
@@ -15,13 +15,13 @@ Checked in the VS Code extension panel. Other surfaces are untested.
 At the prompt of a terminal session:
 
 ```
-/plugin install full-focus-view --marketplace carlocontaldi/claude-full-focus-view
+/plugin install chyron --marketplace carlocontaldi/claude-chyron
 ```
 
 From a shell:
 
 ```
-claude plugin install full-focus-view --marketplace carlocontaldi/claude-full-focus-view
+claude plugin install chyron --marketplace carlocontaldi/claude-chyron
 ```
 
 ## Develop
@@ -29,10 +29,10 @@ claude plugin install full-focus-view --marketplace carlocontaldi/claude-full-fo
 Clone, then run Claude Code with the clone as a plugin folder; the mod hot-reloads on save:
 
 ```
-claude --plugin-dir /path/to/claude-full-focus-view
+claude --plugin-dir /path/to/claude-chyron
 ```
 
-or set `CLAUDE_CODE_PLUGIN_DIRS=/path/to/claude-full-focus-view` in the `env` block of `~/.claude/settings.json` to load it in every session.
+or set `CLAUDE_CODE_PLUGIN_DIRS=/path/to/claude-chyron` in the `env` block of `~/.claude/settings.json` to load it in every session.
 
 ```
 claude plugin validate .

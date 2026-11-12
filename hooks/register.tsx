@@ -3,18 +3,18 @@ import type { EngineInterface, Register, Timer, TurnStepChunk } from 'claude-cod
 const STATUS_WIDTH = 120
 const SUMMARY_LIMIT = 600
 // VS Code's status line: 0.9x text across the prompt box's width (the viewport the panel reports), clamped to two
-// rows, with the panel's "full-focus-view plugin " first. Characters per reported column is a fitted estimate.
+// rows, with the panel's "chyron plugin " first. Characters per reported column is a fitted estimate.
 const STATUS_ROWS = 2
 const STATUS_CHARS_PER_COLUMN = 1.7
 const STATUS_FILL = 0.95
-const STATUS_PREFIX_CHARS = 24
+const STATUS_PREFIX_CHARS = 15
 const STATUS_FALLBACK_COLUMNS = 64
 const MIN_SUMMARY_CHARS = 10
 const TICK_MS = 1000
 const HOLD_MS = 30_000
 const TURN_HOLD_MS = 600_000
-// Cells the engine draws before the message: the spinner mark and the "full-focus-view plugin " attribution.
-const SPINNER_CHROME_CELLS = 26
+// Cells the engine draws before the message: the spinner mark and the "chyron plugin " attribution.
+const SPINNER_CHROME_CELLS = 17
 
 // A model request: the output tokens it generated, shown on every tool call it issued.
 type Step = { output?: number }

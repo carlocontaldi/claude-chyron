@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 const SPINNER = {
-  plugin: 'full-focus-view',
+  plugin: 'chyron',
   component: 'Spinner',
   surface: 'terminal',
   props: { word: 'Working', message: null, suffix: '…', mode: 'tool-use' },
@@ -502,11 +502,11 @@ test('the VS Code status line gives each summary an equal share of what the two 
   const second = $.tool.call({ tool: 'Bash', command: 'b', description: 'b'.repeat(300) })
   await pause()
 
-  // Two rows of 64 reported columns hold 64 * 1.7 * 2 * 0.95 = 206 characters, 24 of them the panel's prefix.
-  // The two heads and their separator take 29, which leaves 153 to share: 76 and 77.
+  // Two rows of 64 reported columns hold 64 * 1.7 * 2 * 0.95 = 206 characters, 15 of them the panel's prefix.
+  // The two heads and their separator take 29, which leaves 162 to share: 81 each.
   const text = status?.replace(/\d+s/g, 'Ns')
-  expect(text).toBe(`🟠 BASH Ns · ${'b'.repeat(75)}… ┃ 🟠 BASH Ns · ${'a'.repeat(76)}…`)
-  expect(text?.length).toBe(206 - 24)
+  expect(text).toBe(`🟠 BASH Ns · ${'b'.repeat(80)}… ┃ 🟠 BASH Ns · ${'a'.repeat(80)}…`)
+  expect(text?.length).toBe(206 - 15)
 
   release()
   await Promise.all([first, second])
@@ -536,7 +536,7 @@ test('a short summary hands its spare room to the long one', async ($, on) => {
   const second = $.tool.call({ tool: 'Bash', command: 'l', description: 'l'.repeat(300) })
   await pause()
 
-  expect(status?.replace(/\d+s/g, 'Ns')).toBe(`🟠 BASH Ns · ${'l'.repeat(147)}… ┃ 🟠 BASH Ns · short`)
+  expect(status?.replace(/\d+s/g, 'Ns')).toBe(`🟠 BASH Ns · ${'l'.repeat(156)}… ┃ 🟠 BASH Ns · short`)
 
   release()
   await Promise.all([first, second])

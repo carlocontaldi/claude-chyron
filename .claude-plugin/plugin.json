@@ -1,5 +1,5 @@
 {
-  "name": "full-focus-view",
+  "name": "chyron",
   "version": "0.1.7",
   "description": "Shows the latest running tool, background task or subagent call in the status line.",
   "author": { "name": "Carlo Contaldi" },
