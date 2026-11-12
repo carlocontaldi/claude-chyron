@@ -324,7 +324,7 @@ test('a running call shows the output tokens of the request that issued it, not 
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Bash Ns · test · 1.5k out │ ▶ Bash Ns · build · 1.5k out')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Bash Ns · test ↓1.5k │ ▶ Bash Ns · build ↓1.5k')
 
   release()
   await Promise.all([first, second])
@@ -373,7 +373,7 @@ test('an agent shows its own requests: the latest context plus everything it gen
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Agent Ns · digest · 22.5k tok')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Agent Ns · digest Σ23k')
 
   release()
   await running
@@ -410,7 +410,7 @@ test('an Agent issued in the same request neither dilutes a sibling call nor sho
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Bash Ns · test · 1.5k out │ ▶ Agent Ns · digest')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Bash Ns · test ↓1.5k │ ▶ Agent Ns · digest')
 
   release()
   await Promise.all([agent, bash])
@@ -444,7 +444,7 @@ test('a background agent keeps counting its requests after its launch returned',
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ ⏳ Agent Ns · digest · 20.4k tok')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ ⏳ Agent Ns · digest Σ21k')
 })
 
 test("a subagent's tool call shows the output tokens of the subagent's request", async ($, on) => {
@@ -472,7 +472,38 @@ test("a subagent's tool call shows the output tokens of the subagent's request",
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Bash (subagent) Ns · list · 300 out')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Bash (subagent) Ns · list ↓300')
+
+  release()
+  await running
+})
+
+test('a count rounds up to two digits, carrying 9,950 over to 10k', async ($, on) => {
+  let drawn = ''
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  on('ui.render', ($, e) => {
+    drawn = String(e.props.message)
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('turn.step', async function* (_, e) {
+    yield { kind: 'tool', index: 0, id: 'toolu_a', name: 'Bash' }
+    yield { kind: 'stop', stopReason: 'tool_use', usage: usage(9_950) }
+    return answer(e)
+  })
+  on('tool.call', async () => {
+    await gate
+    return { result: {} }
+  })
+
+  await drain($.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 }))
+  const running = $.tool.call({ tool: 'Bash', command: 'make', description: 'build', tool_use_id: 'toolu_a' })
+  await pause()
+
+  const ui = await $.ui.mount(SPINNER)
+  await ui.unmount()
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Bash Ns · build ↓10k')
 
   release()
   await running
@@ -564,5 +595,5 @@ test('the VS Code status line puts the token count after the summary', async ($,
   await drain($.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 }))
   await $.tool.call({ tool: 'Bash', command: 'make', description: 'build', tool_use_id: 'toolu_a' })
 
-  expect(status?.replace(/\d+s/g, 'Ns')).toBe('🟢 BASH done Ns ago · build · 1.5k out')
+  expect(status?.replace(/\d+s/g, 'Ns')).toBe('🟢 BASH done Ns ago · build ↓1.5k')
 })

@@ -69,7 +69,14 @@ const headline = (input: Record<string, unknown>) =>
 
 const seconds = (ms: number) => `${Math.round(ms / 1000)}s`
 
-const count = (n: number) => (n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`)
+// Two digits where a unit allows (1.5k, 39k, 1.2M), rounded up so a count never reads lower than it is.
+const count = (n: number) => {
+  if (n < 1000) return String(n)
+  if (Math.ceil(n / 100) < 100) return `${(Math.ceil(n / 100) / 10).toFixed(1)}k`
+  if (Math.ceil(n / 1000) < 1000) return `${Math.ceil(n / 1000)}k`
+  if (Math.ceil(n / 100_000) < 100) return `${(Math.ceil(n / 100_000) / 10).toFixed(1)}M`
+  return `${Math.ceil(n / 1_000_000)}M`
+}
 
 const usageOf = (agentId: string) => {
   const usage = agentUsage.get(agentId) ?? { context: 0, output: 0 }
@@ -94,9 +101,9 @@ const tally = (step: Step, agentId: string | undefined, chunk: TurnStepChunk) =>
 
 // An agent shows its own requests' total; any other call, the output of the request that issued it.
 const tokenText = ({ tool, usage, step }: Call) => {
-  if (usage) return usage.context + usage.output > 0 ? `${count(usage.context + usage.output)} tok` : undefined
+  if (usage) return usage.context + usage.output > 0 ? `Σ${count(usage.context + usage.output)}` : undefined
   if (tool === 'Agent' || step?.output === undefined) return undefined
-  return `${count(step.output)} out`
+  return `↓${count(step.output)}`
 }
 
 const clock = ({ startedAt, endedAt }: Item) =>
@@ -138,14 +145,12 @@ const active = (): Item[] => {
   return items.length === 0 && last && isHeld ? [callItem(last, false)] : items
 }
 
-const itemText = (item: Item) =>
-  [
-    `${item.endedAt === undefined ? '▶' : '✓'} ${item.label} ${clock(item)}`,
-    item.summary && oneLine(item.summary, STATUS_WIDTH),
-    item.tokens,
-  ]
-    .filter(Boolean)
-    .join(' · ')
+const withTokens = (text: string, tokens?: string) => (tokens ? `${text} ${tokens}` : text)
+
+const itemText = (item: Item) => {
+  const head = `${item.endedAt === undefined ? '▶' : '✓'} ${item.label} ${clock(item)}`
+  return withTokens([head, item.summary && oneLine(item.summary, STATUS_WIDTH)].filter(Boolean).join(' · '), item.tokens)
+}
 
 const compactingText = () =>
   compactingSince === undefined ? undefined : `Compacting conversation · ${seconds(Date.now() - compactingSince)}`
@@ -177,7 +182,7 @@ const stripText = (items: Item[], lead?: string, columns = STATUS_FALLBACK_COLUM
   })
   const leadText = lead && `🟠 ${lead}`
   const fixedOf = (item: Item, head: string) =>
-    head.length + (item.summary ? 3 : 0) + (item.tokens ? 3 + item.tokens.length : 0)
+    head.length + (item.summary ? 3 : 0) + (item.tokens ? 1 + item.tokens.length : 0)
   const separators = 3 * Math.max(0, items.length - (leadText ? 0 : 1))
   const fixed = (leadText?.length ?? 0) + separators + items.reduce((sum, item, index) => sum + fixedOf(item, heads[index] ?? ''), 0)
   const capacity = Math.floor(columns * STATUS_CHARS_PER_COLUMN * STATUS_ROWS * STATUS_FILL) - STATUS_PREFIX_CHARS
@@ -185,7 +190,7 @@ const stripText = (items: Item[], lead?: string, columns = STATUS_FALLBACK_COLUM
   return [
     leadText,
     ...items.map((item, index) =>
-      [heads[index], item.summary && oneLine(item.summary, shares[index] ?? 0), item.tokens].filter(Boolean).join(' · '),
+      withTokens([heads[index], item.summary && oneLine(item.summary, shares[index] ?? 0)].filter(Boolean).join(' · '), item.tokens),
     ),
   ]
     .filter(Boolean)
