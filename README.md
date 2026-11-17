@@ -1,4 +1,7 @@
-# Claude Chyron
+<h1 align="center">
+  <img src="assets/chyron-logo.png" alt="" width="120"><br>
+  Claude Chyron
+</h1>
 
 > **chy·ron** · US /ˈkaɪrɑn/, UK /ˈkaɪrɒn/ (*KY-ron*) · *noun*, plural *chyrons*
 >
