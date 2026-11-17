@@ -201,20 +201,26 @@ const withTokens = (text: string, tokens?: string) => (tokens ? `${text} ${token
 
 const detail = (summary: string, activity?: string) => [summary, activity].filter(Boolean).join(' ▸ ')
 
-const itemText = (item: Item) => {
-  const head = `${item.endedAt === undefined ? '▶' : '✓'} ${item.label} ${clock(item)}`
+// With the owl on, it stands in for the running mark of the entry right after it.
+const itemText = (item: Item, isAfterOwl = false) => {
+  const mark = item.endedAt !== undefined ? '✓ ' : isAfterOwl ? '' : '▶ '
+  const head = `${mark}${item.label} ${clock(item)}`
   const text = detail(oneLine(item.summary, STATUS_WIDTH), item.activity && oneLine(item.activity, STATUS_WIDTH))
   return withTokens([head, item.tools, text].filter(Boolean).join(' · '), item.tokens)
 }
 
-const compactingText = () =>
-  compactingSince === undefined ? undefined : `Compacting conversation · ${seconds(Date.now() - compactingSince)}`
+const compactingText = (dot = '·') =>
+  compactingSince === undefined ? undefined : `Compacting conversation ${dot} ${seconds(Date.now() - compactingSince)}`
 
-// The owl takes the place of the separator after the lead (the engine's word or the compaction text), or leads the line.
+// On the terminal the owl stands where the dot was.
+const terminalCompactingText = () => compactingText(isOwlOn ? OWL : undefined)
+
+// The owl starts each entry in place of the separator and the running mark (`│ ▶`). A background entry has its own `⏳`
+// there instead; the check reads the entry's kind, never the text it holds.
 const statusText = (items: Item[], lead?: string) => {
-  const entries = items.map(itemText).join(' │ ')
-  if (!isOwlOn) return [lead, entries].filter(Boolean).join(' │ ')
-  return (lead ? [lead, OWL, entries] : [OWL, entries]).filter(Boolean).join(' ')
+  if (!isOwlOn) return [lead, ...items.map(item => itemText(item))].filter(Boolean).join(' │ ')
+  const entries = items.map(item => (item.isBackground ? '' : `${OWL} `) + itemText(item, true))
+  return [lead, ...entries].filter(Boolean).join(' ')
 }
 
 // A hook cannot measure text; estimate the wrap from the viewport width in cells.
@@ -266,7 +272,7 @@ const refresh = ($: EngineInterface) => {
   const items = active()
   const isBusy = items.length > 0 || compactingSince !== undefined
   // The terminal's spinner shows this line during a turn; VS Code's is untouched, so its status line shows it.
-  const text = isVscode ? stripText(items, compactingText(), statusColumns) : statusText(items, compactingText())
+  const text = isVscode ? stripText(items, compactingText(), statusColumns) : statusText(items, terminalCompactingText())
   $.ui.status(isBusy && (!isTurn || isVscode) ? text : undefined)
   $.ui.invalidate('ui.render')
   if (isBusy) {
@@ -384,7 +390,7 @@ export const register: Register = (on, options) => {
   // engine's message, and a wrapped text goes in a card under the engine row.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
     const items = active()
-    const compacting = compactingText()
+    const compacting = terminalCompactingText()
     if (e.surface === 'vscode') {
       isVscode = true
       statusColumns = e.viewport?.columns
