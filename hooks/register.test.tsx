@@ -731,7 +731,41 @@ test('an agent shows how many tools it has called and the latest one', async ($,
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 Agent Ns · 2 tools · digest ▸ Read: /a.py Σ1.2k')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 Agent Ns · 2 tools · digest 🦉 Read: /a.py Σ1.2k')
+
+  release()
+  await running
+})
+
+test('with the owl option off an agent keeps the ▸ before its latest tool', { options: { show_owl: false } }, async ($, on) => {
+  let drawn = ''
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  on('ui.render', ($, e) => {
+    drawn = String((e.props as { message?: unknown }).message)
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('agent.spawn', () => ({ model: 'm', agentId: 'sub1' }))
+  on('turn.step', async function* (_, e) {
+    return yield* e.index === 0
+      ? toolRequest(e, 'Bash', '{"command":"ls",', '"description":"list files"}')
+      : toolRequest(e, 'Read', '{"file_path":"/a.py"}')
+  })
+  on('tool.call', async () => {
+    await gate
+    return { result: {} }
+  })
+
+  const running = $.tool.call({ tool: 'Agent', description: 'digest', prompt: 'p', tool_use_id: 'toolu_ag' })
+  await pause()
+  await $.agent.spawn({ prompt: 'p', description: 'digest', tool_use_id: 'toolu_ag' } as never)
+  await drain($.turn.step({ turnId: 'sub-t', index: 0, model: 'm', messageCount: 1, agentId: 'sub1' }))
+  await drain($.turn.step({ turnId: 'sub-t', index: 1, model: 'm', messageCount: 3, agentId: 'sub1' }))
+
+  const ui = await $.ui.mount(SPINNER)
+  await ui.unmount()
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Agent Ns · 2 tools · digest ▸ Read: /a.py Σ1.2k')
 
   release()
   await running
@@ -793,7 +827,7 @@ test('a tool whose input never arrives shows by name', async ($, on) => {
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ✓ Agent done Ns ago · 1 tool · digest ▸ Bash Σ1.1k')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ✓ Agent done Ns ago · 1 tool · digest 🦉 Bash Σ1.1k')
 })
 
 test('on VS Code the tool count follows the clock and the summary and the latest tool share the room', async ($, on) => {
@@ -867,7 +901,7 @@ test('a background agent keeps its tool count and latest tool after its launch r
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('⏳ Agent Ns · 1 tool · digest ▸ Bash: list files Σ1.1k')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('⏳ Agent Ns · 1 tool · digest 🦉 Bash: list files Σ1.1k')
 
   releaseInner()
   await inside

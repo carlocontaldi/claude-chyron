@@ -199,13 +199,13 @@ const active = (): Item[] => {
 
 const withTokens = (text: string, tokens?: string) => (tokens ? `${text} ${tokens}` : text)
 
-const detail = (summary: string, activity?: string) => [summary, activity].filter(Boolean).join(' ▸ ')
+const detail = (summary: string, activity?: string, mark = '▸') => [summary, activity].filter(Boolean).join(` ${mark} `)
 
 // With the owl on, it stands in for the running mark of the entry right after it.
 const itemText = (item: Item, isAfterOwl = false) => {
   const mark = item.endedAt !== undefined ? '✓ ' : isAfterOwl ? '' : '▶ '
   const head = `${mark}${item.label} ${clock(item)}`
-  const text = detail(oneLine(item.summary, STATUS_WIDTH), item.activity && oneLine(item.activity, STATUS_WIDTH))
+  const text = detail(oneLine(item.summary, STATUS_WIDTH), item.activity && oneLine(item.activity, STATUS_WIDTH), isOwlOn ? OWL : undefined)
   return withTokens([head, item.tools, text].filter(Boolean).join(' · '), item.tokens)
 }
 
