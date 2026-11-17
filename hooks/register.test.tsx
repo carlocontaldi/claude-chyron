@@ -42,7 +42,7 @@ test('the spinner lists every running item, latest start first', async ($, on) =
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ ⏳ Agent Ns · audit │ ▶ ⏳ Agent Ns · digest │ ▶ Bash Ns · build')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ▶ ⏳ Agent Ns · audit │ ▶ ⏳ Agent Ns · digest │ ▶ Bash Ns · build')
 
   release()
   await running
@@ -60,7 +60,7 @@ test('a Skill call shows the skill it loaded', async ($, on) => {
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('✓ Skill done Ns ago · engineering:writing-code')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ✓ Skill done Ns ago · engineering:writing-code')
 })
 
 test('an agent notification delivered into a running turn clears the agent', async ($, on) => {
@@ -77,7 +77,7 @@ test('an agent notification delivered into a running turn clears the agent', asy
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('✓ Agent done Ns ago · digest')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ✓ Agent done Ns ago · digest')
 })
 
 test('while the model thinks, its own word leads the background items', async ($, on) => {
@@ -92,7 +92,7 @@ test('while the model thinks, its own word leads the background items', async ($
 
   const ui = await $.ui.mount({ ...SPINNER, props: { ...SPINNER.props, mode: 'thinking' } })
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('Working │ ▶ ⏳ Agent Ns · digest')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('Working 🦉 ▶ ⏳ Agent Ns · digest')
 })
 
 test('a spinner text too long for the viewport goes in a card under the engine row, a short one rewrites the message', async ($, on) => {
@@ -113,11 +113,11 @@ test('a spinner text too long for the viewport goes in a card under the engine r
   }
   const wide = await drawnAt(200)
   expect(wide.card).toBeUndefined()
-  expect(String(wide.message).replace(/\d+s/g, 'Ns')).toBe('✓ Bash done Ns ago · build the whole project')
+  expect(String(wide.message).replace(/\d+s/g, 'Ns')).toBe('🦉 ✓ Bash done Ns ago · build the whole project')
 
   const narrow = await drawnAt(40)
   expect(narrow.message).toBeNull()
-  expect(narrow.card?.text.replace(/\d+s/g, 'Ns')).toBe('engine✓ Bash done Ns ago · build the whole project')
+  expect(narrow.card?.text.replace(/\d+s/g, 'Ns')).toBe('engine🦉 ✓ Bash done Ns ago · build the whole project')
 })
 
 // The engine refuses a drawing that holds its own node under a Box with one of these props, and skips the hook.
@@ -269,7 +269,7 @@ test('the spinner says Compacting while a compaction runs, then goes back to the
   await pause()
   let ui = await $.ui.mount({ ...SPINNER, props: { ...SPINNER.props, mode: 'requesting' } })
   await ui.unmount()
-  expect(String(drawn).replace(/\d+s/g, 'Ns')).toBe('Compacting conversation · Ns')
+  expect(String(drawn).replace(/\d+s/g, 'Ns')).toBe('Compacting conversation · Ns 🦉')
 
   release()
   await compacting
@@ -325,7 +325,7 @@ test('a running call shows the output tokens of the request that issued it, not 
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Bash Ns · test ↓1.5k │ ▶ Bash Ns · build ↓1.5k')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ▶ Bash Ns · test ↓1.5k │ ▶ Bash Ns · build ↓1.5k')
 
   release()
   await Promise.all([first, second])
@@ -343,7 +343,7 @@ test('a call the model did not issue shows no token count', async ($, on) => {
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('✓ Bash done Ns ago · build')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ✓ Bash done Ns ago · build')
 })
 
 test('an agent shows its own requests: the latest context plus everything it generated', async ($, on) => {
@@ -374,7 +374,7 @@ test('an agent shows its own requests: the latest context plus everything it gen
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Agent Ns · digest Σ23k')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ▶ Agent Ns · digest Σ23k')
 
   release()
   await running
@@ -411,7 +411,7 @@ test('an Agent issued in the same request neither dilutes a sibling call nor sho
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Bash Ns · test ↓1.5k │ ▶ Agent Ns · digest')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ▶ Bash Ns · test ↓1.5k │ ▶ Agent Ns · digest')
 
   release()
   await Promise.all([agent, bash])
@@ -445,7 +445,7 @@ test('a background agent keeps counting its requests after its launch returned',
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ ⏳ Agent Ns · digest Σ21k')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ▶ ⏳ Agent Ns · digest Σ21k')
 })
 
 test("a subagent's tool call shows the output tokens of the subagent's request", async ($, on) => {
@@ -473,7 +473,7 @@ test("a subagent's tool call shows the output tokens of the subagent's request",
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Bash (subagent) Ns · list ↓300')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ▶ Bash (subagent) Ns · list ↓300')
 
   release()
   await running
@@ -504,7 +504,7 @@ test('a count rounds up to two digits, carrying 9,950 over to 10k', async ($, on
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Bash Ns · build ↓10k')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ▶ Bash Ns · build ↓10k')
 
   release()
   await running
@@ -611,7 +611,7 @@ test('an empty description does not hide the command', async ($, on) => {
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('✓ Bash done Ns ago · make test')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ✓ Bash done Ns ago · make test')
 })
 
 test('a background task whose notification never came is dropped after six hours', () => {
@@ -652,7 +652,7 @@ test('the token counts of requests nobody claimed are forgotten once newer ones 
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Bash Ns · newest ↓1.5k │ ▶ Bash Ns · oldest')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ▶ Bash Ns · newest ↓1.5k │ ▶ Bash Ns · oldest')
 
   release()
   await Promise.all([oldest, newest])
@@ -689,7 +689,7 @@ test('the totals of subagents that finished long ago are forgotten once newer on
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Agent Ns · newest Σ1.1k │ ▶ Agent Ns · oldest')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ▶ Agent Ns · newest Σ1.1k │ ▶ Agent Ns · oldest')
 
   release()
   await Promise.all([oldest, newest])
@@ -731,7 +731,7 @@ test('an agent shows how many tools it has called and the latest one', async ($,
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Agent Ns · 2 tools · digest ▸ Read: /a.py Σ1.2k')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ▶ Agent Ns · 2 tools · digest ▸ Read: /a.py Σ1.2k')
 
   release()
   await running
@@ -760,7 +760,7 @@ test("a tool call inside an agent with its own entry shows there, not as an entr
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Agent Ns · digest')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ▶ Agent Ns · digest')
 
   release()
   await Promise.all([agent, inside])
@@ -793,7 +793,7 @@ test('a tool whose input never arrives shows by name', async ($, on) => {
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('✓ Agent done Ns ago · 1 tool · digest ▸ Bash Σ1.1k')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ✓ Agent done Ns ago · 1 tool · digest ▸ Bash Σ1.1k')
 })
 
 test('on VS Code the tool count follows the clock and the summary and the latest tool share the room', async ($, on) => {
@@ -867,8 +867,23 @@ test('a background agent keeps its tool count and latest tool after its launch r
 
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ ⏳ Agent Ns · 1 tool · digest ▸ Bash: list files Σ1.1k')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ▶ ⏳ Agent Ns · 1 tool · digest ▸ Bash: list files Σ1.1k')
 
   releaseInner()
   await inside
+})
+
+test('with the owl option off the spinner has no owl', { options: { show_owl: false } }, async ($, on) => {
+  let message: unknown
+  on('ui.render', ($, e) => {
+    message = (e.props as { message?: unknown }).message
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('tool.call', () => ({ result: { status: 'async_launched', agentId: 'a1' } }))
+  await $.tool.call({ tool: 'Agent', description: 'digest', prompt: 'p' })
+
+  const ui = await $.ui.mount({ ...SPINNER, props: { ...SPINNER.props, mode: 'thinking' } })
+  await ui.unmount()
+  expect(String(message).replace(/\d+s/g, 'Ns')).toBe('Working │ ▶ ⏳ Agent Ns · digest')
 })

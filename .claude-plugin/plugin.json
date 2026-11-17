@@ -6,5 +6,14 @@
   "license": "MIT",
   "homepage": "https://github.com/carlocontaldi",
   "repository": "https://github.com/carlocontaldi/claude-chyron",
-  "icon": "./.claude-plugin/icon.png"
+  "icon": "./.claude-plugin/icon.png",
+  "userConfig": {
+    "show_owl": {
+      "type": "boolean",
+      "title": "Show the owl",
+      "description": "Mark each status line with the owl, Chyron's logo. On by default; turn it off for a plain line.",
+      "default": true,
+      "required": false
+    }
+  }
 }

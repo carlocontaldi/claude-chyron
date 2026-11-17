@@ -13,11 +13,12 @@ A chyron says what is happening without stopping the broadcast. Claude Chyron do
 
 **Token-free.** It makes no model calls and passes every prompt, tool call and response through unchanged, so it adds nothing to the context and costs none of your usage. Even its token counts are read from the usage the engine already reports.
 
-- **Status line** while something runs or has just run, one entry for every running call and background task, latest start first: `▶ Bash 12s · <description or command> │ ⏳ Agent 340s · <description>`. The last finished call stays as `✓ … done 4s ago` through the turn, so a chain of quick calls does not flash and vanish.
-- **During a turn** on the terminal the same line replaces the engine's spinner message. While the model is thinking, requesting or responding, the engine's own word leads it (`Sauteing │ ⏳ Agent 340s · <description>`); while a tool call runs, the call's entry does. On VS Code the spinner is the engine's own and the status line carries the entries all through the turn: a coloured emoji for the state (`🟠` running, `🟢` finished, `⏳` background), the tool name in capitals, then the time, the summary and last the token count, separated by `┃` between entries. The summaries share the room the two rows have left, an equal share each.
+- **Status line** while something runs or has just run, one entry for every running call and background task, latest start first: `🦉 ▶ Bash 12s · <description or command> │ ⏳ Agent 340s · <description>`. The last finished call stays as `✓ … done 4s ago` through the turn, so a chain of quick calls does not flash and vanish.
+- **The owl.** On the terminal a `🦉`, the owl of the logo, marks the line, as a channel's on-screen logo marks its broadcast. It leads the line, or takes the place of the `│` after the engine's own word or the compaction text. The VS Code status line already starts with a state emoji (`🟠`, `🟢`, `⏳`), so it has no owl. The owl is on by default; the *Show the owl* option turns it off (see [Configure](#configure)).
+- **During a turn** on the terminal the same line replaces the engine's spinner message. While the model is thinking, requesting or responding, the engine's own word leads it (`Sauteing 🦉 ⏳ Agent 340s · <description>`); while a tool call runs, the call's entry does. On VS Code the spinner is the engine's own and the status line carries the entries all through the turn: a coloured emoji for the state (`🟠` running, `🟢` finished, `⏳` background), the tool name in capitals, then the time, the summary and last the token count, separated by `┃` between entries. The summaries share the room the two rows have left, an equal share each.
 - **Token counts** on each entry, in the status line and the spinner, read from usage the engine already reports (no model calls): an Agent shows its subagent's total so far, its latest request's context plus everything it has generated after a `Σ` (`⏳ Agent 340s · <description> Σ39k`); any other call shows the output tokens of the request that issued it after a `↓`, thinking and text included, the same figure on every call that request issued (`▶ Bash 12s · <command> ↓1.5k`). Counts keep two digits where the unit allows (`300`, `1.5k`, `39k`, `151k`, `1.2M`), rounded up. A call a plugin raised, not the model, shows none.
 - **Agent progress.** An Agent entry also shows how many tools its subagent has called and the last one, after a `▸` (`⏳ Agent 340s · 50 tools · <description> ▸ Bash: <description> Σ39k`). Both are read from the subagent's own requests, so a tool appears once its request has finished, just before it runs. A call made inside a subagent shows only there, not as an entry of its own. On VS Code the summary and the last tool share the room the two rows have left.
-- **Compaction** shows as `Compacting conversation · 12s` at the start of the spinner line, and in the status line when no turn is running (`/compact`).
+- **Compaction** shows as `Compacting conversation · 12s` at the start of the spinner line (the owl follows it), and in the status line when no turn is running (`/compact`).
 - **Background Bash and Agent launches** show as `⏳` until their task notification arrives (an agent's notification delivered mid-turn is read from the message queue).
 
 Checked in the VS Code extension panel. Other surfaces are untested.
@@ -34,6 +35,15 @@ From a shell:
 
 ```
 claude plugin install chyron --marketplace carlocontaldi/claude-chyron
+```
+
+## Configure
+
+One option, *Show the owl*, on by default. Change it from a shell; it applies after a restart:
+
+```
+claude plugin configure chyron@claude-chyron          # shows which are set
+echo '{"show_owl": "false"}' | claude plugin configure chyron@claude-chyron --values-stdin
 ```
 
 ## Develop

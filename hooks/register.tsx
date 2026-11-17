@@ -8,6 +8,8 @@ const STATUS_ROWS = 2
 const STATUS_CHARS_PER_COLUMN = 1.7
 const STATUS_FILL = 0.95
 const STATUS_PREFIX_CHARS = 15
+// The owl, Chyron's logo, marks the spinner line like a channel's on-screen bug.
+const OWL = '🦉'
 const STATUS_FALLBACK_COLUMNS = 64
 const MIN_SUMMARY_CHARS = 10
 const TICK_MS = 1000
@@ -49,6 +51,7 @@ type Item = {
   endedAt?: number
 }
 
+let isOwlOn = true
 let launches = 0
 const calls = new Map<string, Call>()
 const steps = new Map<string, Step>()
@@ -207,7 +210,12 @@ const itemText = (item: Item) => {
 const compactingText = () =>
   compactingSince === undefined ? undefined : `Compacting conversation · ${seconds(Date.now() - compactingSince)}`
 
-const statusText = (items: Item[], lead?: string) => [lead, ...items.map(itemText)].filter(Boolean).join(' │ ')
+// The owl takes the place of the separator after the lead (the engine's word or the compaction text), or leads the line.
+const statusText = (items: Item[], lead?: string) => {
+  const entries = items.map(itemText).join(' │ ')
+  if (!isOwlOn) return [lead, entries].filter(Boolean).join(' │ ')
+  return (lead ? [lead, OWL, entries] : [OWL, entries]).filter(Boolean).join(' ')
+}
 
 // A hook cannot measure text; estimate the wrap from the viewport width in cells.
 const isWrapped = (text: string, columns?: number) => columns !== undefined && SPINNER_CHROME_CELLS + text.length > columns
@@ -225,7 +233,7 @@ const summaryShares = (lengths: number[], room: number) => {
   return shares
 }
 
-// VS Code's status line is plain grey text: coloured emoji mark the state and tool names are upper case. The summaries
+// VS Code's status line is plain grey text: coloured emoji mark the state (so no owl leads it) and tool names are upper case. The summaries
 // share the room the two rows have left after the fixed parts, so the rows are filled and nothing is cut early.
 const stripText = (items: Item[], lead?: string, columns = STATUS_FALLBACK_COLUMNS) => {
   const heads = items.map(item => {
@@ -269,7 +277,9 @@ const refresh = ($: EngineInterface) => {
   }
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  isOwlOn = options.show_owl !== false
+
   on('tool.call', async ($, e, next) => {
     const call: Call = {
       tool: e.tool,
