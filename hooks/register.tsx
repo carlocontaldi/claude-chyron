@@ -19,18 +19,22 @@ const MAX_REMEMBERED = 256
 // Cells the engine draws before the message: the spinner mark and the "chyron plugin " attribution.
 const SPINNER_CHROME_CELLS = 17
 
+// A tool call a request issues: its name and the streamed JSON of its input.
+type Use = { name: string; json: string }
 // A model request: the output tokens it generated, shown on every tool call it issued.
-type Step = { output?: number }
-// A subagent's tokens so far: its latest request's context plus everything it has generated.
-type Usage = { context: number; output: number }
+type Step = { output?: number; uses: Map<number, Use> }
+// A subagent so far: its latest request's context plus everything it has generated, the tools it called and the last one.
+type Progress = { context: number; output: number; tools: number; latest?: string }
 type Call = {
   tool: string
   input: Record<string, unknown>
   startedAt: number
   seq: number
   isSubagent: boolean
+  // The agent this call runs in, when it is a subagent's.
+  agent?: Progress
   step?: Step
-  usage?: Usage
+  progress?: Progress
 }
 type Item = {
   label: string
@@ -38,6 +42,8 @@ type Item = {
   isBackground: boolean
   summary: string
   tokens?: string
+  tools?: string
+  activity?: string
   startedAt: number
   seq: number
   endedAt?: number
@@ -46,7 +52,7 @@ type Item = {
 let launches = 0
 const calls = new Map<string, Call>()
 const steps = new Map<string, Step>()
-const agentUsage = new Map<string, Usage>()
+const agentProgress = new Map<string, Progress>()
 const backgrounds = new Map<string, Call>()
 let last: (Call & { endedAt: number }) | undefined
 let isTurn = false
@@ -85,33 +91,55 @@ const remember = <V,>(map: Map<string, V>, key: string, value: V) => {
   if (map.size > MAX_REMEMBERED) map.delete(map.keys().next().value as string)
 }
 
-const usageOf = (agentId: string) => {
-  const usage = agentUsage.get(agentId) ?? { context: 0, output: 0 }
-  remember(agentUsage, agentId, usage)
-  return usage
+const progressOf = (agentId: string) => {
+  const progress = agentProgress.get(agentId) ?? { context: 0, output: 0, tools: 0 }
+  remember(agentProgress, agentId, progress)
+  return progress
 }
 
-// Tokens are only counted by a request's stop chunk, so each call and subagent is charged from it.
+const activityOf = ({ name, json }: Use) => {
+  try {
+    const text = headline(JSON.parse(json))
+    return text ? `${name}: ${text}` : name
+  } catch {
+    return name
+  }
+}
+
+// Tokens are only counted by a request's stop chunk, so each call and subagent is charged from it. A subagent's tools
+// are read from its requests too, which reach the mod for a background agent as well.
 const tally = (step: Step, agentId: string | undefined, chunk: TurnStepChunk) => {
   if (chunk.kind === 'tool') {
     remember(steps, chunk.id, step)
-  } else if (chunk.kind === 'stop' && chunk.usage) {
+    if (agentId === undefined) return
+    step.uses.set(chunk.index, { name: chunk.name, json: '' })
+    progressOf(agentId).tools++
+  } else if (chunk.kind === 'input') {
+    const use = step.uses.get(chunk.index)
+    if (use) use.json += chunk.json
+  } else if (chunk.kind === 'stop') {
+    const latest = [...step.uses.values()].pop()
+    if (agentId !== undefined && latest) progressOf(agentId).latest = activityOf(latest)
+    if (!chunk.usage) return
     const { input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens } = chunk.usage
     step.output = output_tokens
     if (agentId !== undefined) {
-      const usage = usageOf(agentId)
-      usage.context = input_tokens + cache_creation_input_tokens + cache_read_input_tokens
-      usage.output += output_tokens
+      const progress = progressOf(agentId)
+      progress.context = input_tokens + cache_creation_input_tokens + cache_read_input_tokens
+      progress.output += output_tokens
     }
   }
 }
 
 // An agent shows its own requests' total; any other call, the output of the request that issued it.
-const tokenText = ({ tool, usage, step }: Call) => {
-  if (usage) return usage.context + usage.output > 0 ? `Σ${count(usage.context + usage.output)}` : undefined
+const tokenText = ({ tool, progress, step }: Call) => {
+  if (progress) return progress.context + progress.output > 0 ? `Σ${count(progress.context + progress.output)}` : undefined
   if (tool === 'Agent' || step?.output === undefined) return undefined
   return `↓${count(step.output)}`
 }
+
+const toolsText = ({ progress }: Call) =>
+  progress?.tools ? `${progress.tools} ${progress.tools === 1 ? 'tool' : 'tools'}` : undefined
 
 const clock = ({ startedAt, endedAt }: Item) =>
   endedAt === undefined ? seconds(Date.now() - startedAt) : `done ${seconds(Date.now() - endedAt)} ago`
@@ -136,6 +164,8 @@ const callItem = (call: Call & { endedAt?: number }, isBackground: boolean): Ite
     isBackground,
     summary: headline(call.input),
     tokens: tokenText(call),
+    tools: toolsText(call),
+    activity: call.progress?.latest,
     startedAt: call.startedAt,
     seq: call.seq,
     endedAt: call.endedAt,
@@ -148,21 +178,30 @@ export const dropExpired = (tasks: Map<string, { startedAt: number }>, now: numb
 }
 
 // Running calls and background work, latest start first (`seq` orders calls that start in one millisecond).
+// A call inside an agent that has its own entry shows there, as that entry's latest tool.
 const active = (): Item[] => {
   dropExpired(backgrounds, Date.now())
-  const items = [
-    ...[...calls.values()].map(call => callItem(call, false)),
-    ...[...backgrounds.values()].map(call => callItem(call, true)),
-  ].sort((a, b) => b.startedAt - a.startedAt || b.seq - a.seq)
+  const entries = [
+    ...[...calls.values()].map(call => ({ call, isBackground: false })),
+    ...[...backgrounds.values()].map(call => ({ call, isBackground: true })),
+  ]
+  const listed = new Set(entries.map(({ call }) => call.progress))
+  const items = entries
+    .filter(({ call }) => !call.agent || !listed.has(call.agent))
+    .map(({ call, isBackground }) => callItem(call, isBackground))
+    .sort((a, b) => b.startedAt - a.startedAt || b.seq - a.seq)
   const isHeld = last && !isIdle && Date.now() - last.endedAt < (isTurn ? TURN_HOLD_MS : HOLD_MS)
   return items.length === 0 && last && isHeld ? [callItem(last, false)] : items
 }
 
 const withTokens = (text: string, tokens?: string) => (tokens ? `${text} ${tokens}` : text)
 
+const detail = (summary: string, activity?: string) => [summary, activity].filter(Boolean).join(' ▸ ')
+
 const itemText = (item: Item) => {
   const head = `${item.endedAt === undefined ? '▶' : '✓'} ${item.label} ${clock(item)}`
-  return withTokens([head, item.summary && oneLine(item.summary, STATUS_WIDTH)].filter(Boolean).join(' · '), item.tokens)
+  const text = detail(oneLine(item.summary, STATUS_WIDTH), item.activity && oneLine(item.activity, STATUS_WIDTH))
+  return withTokens([head, item.tools, text].filter(Boolean).join(' · '), item.tokens)
 }
 
 const compactingText = () =>
@@ -191,20 +230,21 @@ const summaryShares = (lengths: number[], room: number) => {
 const stripText = (items: Item[], lead?: string, columns = STATUS_FALLBACK_COLUMNS) => {
   const heads = items.map(item => {
     const state = item.isBackground ? '⏳' : item.endedAt === undefined ? '🟠' : '🟢'
-    return `${state} ${item.name.toUpperCase()} ${clock(item)}`
+    return [`${state} ${item.name.toUpperCase()} ${clock(item)}`, item.tools].filter(Boolean).join(' · ')
   })
   const leadText = lead && `🟠 ${lead}`
   const fixedOf = (item: Item, head: string) =>
-    head.length + (item.summary ? 3 : 0) + (item.tokens ? 1 + item.tokens.length : 0)
+    head.length + (item.summary || item.activity ? 3 : 0) + (item.summary && item.activity ? 3 : 0) + (item.tokens ? 1 + item.tokens.length : 0)
   const separators = 3 * Math.max(0, items.length - (leadText ? 0 : 1))
   const fixed = (leadText?.length ?? 0) + separators + items.reduce((sum, item, index) => sum + fixedOf(item, heads[index] ?? ''), 0)
   const capacity = Math.floor(columns * STATUS_CHARS_PER_COLUMN * STATUS_ROWS * STATUS_FILL) - STATUS_PREFIX_CHARS
-  const shares = summaryShares(items.map(item => item.summary.length), capacity - fixed)
+  const shares = summaryShares(items.flatMap(item => [item.summary.length, item.activity?.length ?? 0]), capacity - fixed)
   return [
     leadText,
-    ...items.map((item, index) =>
-      withTokens([heads[index], item.summary && oneLine(item.summary, shares[index] ?? 0)].filter(Boolean).join(' · '), item.tokens),
-    ),
+    ...items.map((item, index) => {
+      const text = detail(oneLine(item.summary, shares[2 * index] ?? 0), item.activity && oneLine(item.activity, shares[2 * index + 1] ?? 0))
+      return withTokens([heads[index], text].filter(Boolean).join(' · '), item.tokens)
+    }),
   ]
     .filter(Boolean)
     .join(' ┃ ')
@@ -237,6 +277,7 @@ export const register: Register = on => {
       startedAt: Date.now(),
       seq: launches++,
       isSubagent: e.agentId !== undefined,
+      agent: e.agentId === undefined ? undefined : progressOf(e.agentId),
       step: steps.get(e.tool_use_id),
     }
     steps.delete(e.tool_use_id)
@@ -261,18 +302,23 @@ export const register: Register = on => {
   on('agent.spawn', async ($, e, next) => {
     const spawned = await next(e)
     const call = calls.get(e.tool_use_id)
-    if (call && spawned.agentId && !e.workflow) call.usage = usageOf(spawned.agentId)
+    if (call && spawned.agentId && !e.workflow) call.progress = progressOf(spawned.agentId)
     return spawned
   }).catch(($, e, next) => next(e))
 
   on('turn.step', async function* ($, e, next) {
-    const step: Step = {}
-    for await (const chunk of next(e)) {
-      // Counting is best effort: a failure here must not cut the response short.
-      try {
-        tally(step, e.agentId, chunk)
-      } catch {}
-      yield chunk
+    const step: Step = { uses: new Map() }
+    try {
+      for await (const chunk of next(e)) {
+        // Counting is best effort: a failure here must not cut the response short.
+        try {
+          tally(step, e.agentId, chunk)
+        } catch {}
+        yield chunk
+      }
+    } finally {
+      // Calls outlive their request in `steps`, and the inputs they hold can be large.
+      step.uses.clear()
     }
   })
 

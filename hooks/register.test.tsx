@@ -694,3 +694,181 @@ test('the totals of subagents that finished long ago are forgotten once newer on
   release()
   await Promise.all([oldest, newest])
 })
+
+// An agent's request issuing one tool call, its input streamed in pieces.
+const toolRequest = async function* (e: { turnId: string; index: number }, name: string, ...json: string[]) {
+  yield { kind: 'tool', index: 0, id: `toolu_${e.index}`, name } as const
+  for (const piece of json) yield { kind: 'input', index: 0, json: piece } as const
+  yield { kind: 'stop', stopReason: 'tool_use', usage: usage(100, 1000) } as const
+  return answer(e)
+}
+
+test('an agent shows how many tools it has called and the latest one', async ($, on) => {
+  let drawn = ''
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  on('ui.render', ($, e) => {
+    drawn = String(e.props.message)
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('agent.spawn', () => ({ model: 'm', agentId: 'sub1' }))
+  on('turn.step', async function* (_, e) {
+    return yield* e.index === 0
+      ? toolRequest(e, 'Bash', '{"command":"ls",', '"description":"list files"}')
+      : toolRequest(e, 'Read', '{"file_path":"/a.py"}')
+  })
+  on('tool.call', async () => {
+    await gate
+    return { result: {} }
+  })
+
+  const running = $.tool.call({ tool: 'Agent', description: 'digest', prompt: 'p', tool_use_id: 'toolu_ag' })
+  await pause()
+  await $.agent.spawn({ prompt: 'p', description: 'digest', tool_use_id: 'toolu_ag' } as never)
+  await drain($.turn.step({ turnId: 'sub-t', index: 0, model: 'm', messageCount: 1, agentId: 'sub1' }))
+  await drain($.turn.step({ turnId: 'sub-t', index: 1, model: 'm', messageCount: 3, agentId: 'sub1' }))
+
+  const ui = await $.ui.mount(SPINNER)
+  await ui.unmount()
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Agent Ns · 2 tools · digest ▸ Read: /a.py Σ1.2k')
+
+  release()
+  await running
+})
+
+test("a tool call inside an agent with its own entry shows there, not as an entry of its own", async ($, on) => {
+  let drawn = ''
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  on('ui.render', ($, e) => {
+    drawn = String(e.props.message)
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('agent.spawn', () => ({ model: 'm', agentId: 'sub1' }))
+  on('tool.call', async () => {
+    await gate
+    return { result: {} }
+  })
+
+  const agent = $.tool.call({ tool: 'Agent', description: 'digest', prompt: 'p', tool_use_id: 'toolu_ag' })
+  await pause()
+  await $.agent.spawn({ prompt: 'p', description: 'digest', tool_use_id: 'toolu_ag' } as never)
+  const inside = $.tool.call({ tool: 'Bash', command: 'ls', description: 'list', tool_use_id: 'toolu_in', agentId: 'sub1' })
+  await pause()
+
+  const ui = await $.ui.mount(SPINNER)
+  await ui.unmount()
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ Agent Ns · digest')
+
+  release()
+  await Promise.all([agent, inside])
+})
+
+test('a tool whose input never arrives shows by name', async ($, on) => {
+  let drawn = ''
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  on('ui.render', ($, e) => {
+    drawn = String(e.props.message)
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('agent.spawn', () => ({ model: 'm', agentId: 'sub1' }))
+  on('turn.step', async function* (_, e) {
+    return yield* toolRequest(e, 'Bash')
+  })
+  on('tool.call', async () => {
+    await gate
+    return { result: {} }
+  })
+
+  const running = $.tool.call({ tool: 'Agent', description: 'digest', prompt: 'p', tool_use_id: 'toolu_ag' })
+  await pause()
+  await $.agent.spawn({ prompt: 'p', description: 'digest', tool_use_id: 'toolu_ag' } as never)
+  await drain($.turn.step({ turnId: 'sub-t', index: 0, model: 'm', messageCount: 1, agentId: 'sub1' }))
+  release()
+  await running
+
+  const ui = await $.ui.mount(SPINNER)
+  await ui.unmount()
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('✓ Agent done Ns ago · 1 tool · digest ▸ Bash Σ1.1k')
+})
+
+test('on VS Code the tool count follows the clock and the summary and the latest tool share the room', async ($, on) => {
+  let status: string | undefined
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  on('ui.status', ($, e) => {
+    status = e.text
+    return { value: undefined }
+  })
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('agent.spawn', () => ({ model: 'm', agentId: 'sub1' }))
+  on('turn.step', async function* (_, e) {
+    return yield* toolRequest(e, 'Bash', `{"description":"${'a'.repeat(300)}"}`)
+  })
+  on('tool.call', async () => {
+    await gate
+    return { result: {} }
+  })
+  const ui = await $.ui.mount({ ...SPINNER, surface: 'vscode' })
+  await ui.unmount()
+
+  const running = $.tool.call({ tool: 'Agent', description: 'd'.repeat(300), prompt: 'p', tool_use_id: 'toolu_ag' })
+  await pause()
+  await $.agent.spawn({ prompt: 'p', description: 'd'.repeat(300), tool_use_id: 'toolu_ag' } as never)
+  await drain($.turn.step({ turnId: 'sub-t', index: 0, model: 'm', messageCount: 1, agentId: 'sub1' }))
+  release()
+  await running
+
+  const text = status?.replace(/\d+s/g, 'Ns') ?? ''
+  expect(text).toMatch(/^🟢 AGENT done Ns ago · 1 tool · d{40,}… ▸ Bash: a{40,}… Σ1\.1k$/)
+  // Two rows of 64 reported columns hold 206 characters, 15 of them the panel's prefix.
+  expect(text.length).toBeLessThanOrEqual(206 - 15)
+})
+
+test('a background agent keeps its tool count and latest tool after its launch returned, and hides its inner calls', async ($, on) => {
+  let drawn = ''
+  let releaseLaunch!: () => void
+  let releaseInner!: () => void
+  const launchGate = new Promise<void>(resolve => { releaseLaunch = resolve })
+  const innerGate = new Promise<void>(resolve => { releaseInner = resolve })
+  on('ui.render', ($, e) => {
+    drawn = String(e.props.message)
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('agent.spawn', () => ({ model: 'm', agentId: 'sub1' }))
+  on('turn.step', async function* (_, e) {
+    return yield* toolRequest(e, 'Bash', '{"description":"list files"}')
+  })
+  on('tool.call', async (_, e) => {
+    if (e.tool === 'Agent') {
+      await launchGate
+      return { result: { status: 'async_launched', agentId: 'sub1' } }
+    }
+    await innerGate
+    return { result: {} }
+  })
+
+  const launching = $.tool.call({ tool: 'Agent', description: 'digest', prompt: 'p', tool_use_id: 'toolu_ag' })
+  await pause()
+  await $.agent.spawn({ prompt: 'p', description: 'digest', tool_use_id: 'toolu_ag' } as never)
+  releaseLaunch()
+  await launching
+  await drain($.turn.step({ turnId: 'sub-t', index: 0, model: 'm', messageCount: 1, agentId: 'sub1' }))
+  const inside = $.tool.call({ tool: 'Bash', command: 'ls', description: 'list files', tool_use_id: 'toolu_in', agentId: 'sub1' })
+  await pause()
+
+  const ui = await $.ui.mount(SPINNER)
+  await ui.unmount()
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('▶ ⏳ Agent Ns · 1 tool · digest ▸ Bash: list files Σ1.1k')
+
+  releaseInner()
+  await inside
+})
