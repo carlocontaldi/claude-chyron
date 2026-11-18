@@ -50,6 +50,10 @@ type Item = {
   seq: number
   endedAt?: number
 }
+// How long each entry stood in each position of the list: per position, the entry's `seq` and its milliseconds.
+export type Occupancy = Map<number, number>[]
+// What is drawn: the entries and the compaction as they stood at `at`, the one time every clock in it counts to.
+type Frame = { at: number; items: Item[]; compactingSince?: number }
 
 let isOwlOn = true
 let launches = 0
@@ -64,6 +68,13 @@ let compactingSince: number | undefined
 let ticker: Timer | undefined
 let isVscode = false
 let statusColumns: number | undefined
+// Events only note who stands where; the ticker draws one frame a second from the position that held each entry longest.
+let layout: Item[] = []
+let sampledAt = 0
+let windowMs = 0
+let occupancy: Occupancy = []
+let latest = new Map<number, Item>()
+let shown: Frame = { at: 0, items: [] }
 
 const oneLine = (text: string, width: number) => {
   const line = text.replace(/\s+/g, ' ').trim()
@@ -144,8 +155,8 @@ const tokenText = ({ tool, progress, step }: Call) => {
 const toolsText = ({ progress }: Call) =>
   progress?.tools ? `${progress.tools} ${progress.tools === 1 ? 'tool' : 'tools'}` : undefined
 
-const clock = ({ startedAt, endedAt }: Item) =>
-  endedAt === undefined ? seconds(Date.now() - startedAt) : `done ${seconds(Date.now() - endedAt)} ago`
+const clock = ({ startedAt, endedAt }: Item, at: number) =>
+  endedAt === undefined ? seconds(at - startedAt) : `done ${seconds(at - endedAt)} ago`
 
 const inputOf = (e: Record<string, unknown>) => {
   const { tool, tool_use_id, agentId, requestMeta, ...input } = e
@@ -202,24 +213,24 @@ const withTokens = (text: string, tokens?: string) => (tokens ? `${text} ${token
 const detail = (summary: string, activity?: string, mark = '▸') => [summary, activity].filter(Boolean).join(` ${mark} `)
 
 // With the owl on, it stands in for the running mark of the entry right after it.
-const itemText = (item: Item, isAfterOwl = false) => {
+const itemText = (item: Item, at: number, isAfterOwl = false) => {
   const mark = item.endedAt !== undefined ? '✓ ' : isAfterOwl ? '' : '▶ '
-  const head = `${mark}${item.label} ${clock(item)}`
+  const head = `${mark}${item.label} ${clock(item, at)}`
   const text = detail(oneLine(item.summary, STATUS_WIDTH), item.activity && oneLine(item.activity, STATUS_WIDTH), isOwlOn ? OWL : undefined)
   return withTokens([head, item.tools, text].filter(Boolean).join(' · '), item.tokens)
 }
 
-const compactingText = (dot = '·') =>
-  compactingSince === undefined ? undefined : `Compacting conversation ${dot} ${seconds(Date.now() - compactingSince)}`
+const compactingText = ({ at, compactingSince: since }: Frame, dot = '·') =>
+  since === undefined ? undefined : `Compacting conversation ${dot} ${seconds(at - since)}`
 
 // On the terminal the owl stands where the dot was.
-const terminalCompactingText = () => compactingText(isOwlOn ? OWL : undefined)
+const terminalCompactingText = (frame: Frame) => compactingText(frame, isOwlOn ? OWL : undefined)
 
 // The owl starts each entry in place of the separator and the running mark (`│ ▶`). A background entry has its own `⏳`
 // there instead; the check reads the entry's kind, never the text it holds.
-const statusText = (items: Item[], lead?: string) => {
-  if (!isOwlOn) return [lead, ...items.map(item => itemText(item))].filter(Boolean).join(' │ ')
-  const entries = items.map(item => (item.isBackground ? '' : `${OWL} `) + itemText(item, true))
+const statusText = ({ items, at }: Frame, lead?: string) => {
+  if (!isOwlOn) return [lead, ...items.map(item => itemText(item, at))].filter(Boolean).join(' │ ')
+  const entries = items.map(item => (item.isBackground ? '' : `${OWL} `) + itemText(item, at, true))
   return [lead, ...entries].filter(Boolean).join(' ')
 }
 
@@ -241,10 +252,10 @@ const summaryShares = (lengths: number[], room: number) => {
 
 // VS Code's status line is plain grey text: coloured emoji mark the state (so no owl leads it) and tool names are upper case. The summaries
 // share the room the two rows have left after the fixed parts, so the rows are filled and nothing is cut early.
-const stripText = (items: Item[], lead?: string, columns = STATUS_FALLBACK_COLUMNS) => {
+const stripText = ({ items, at }: Frame, lead?: string, columns = STATUS_FALLBACK_COLUMNS) => {
   const heads = items.map(item => {
     const state = item.isBackground ? '⏳' : item.endedAt === undefined ? '🟠' : '🟢'
-    return [`${state} ${item.name.toUpperCase()} ${clock(item)}`, item.tools].filter(Boolean).join(' · ')
+    return [`${state} ${item.name.toUpperCase()} ${clock(item, at)}`, item.tools].filter(Boolean).join(' · ')
   })
   const leadText = lead && `🟠 ${lead}`
   const fixedOf = (item: Item, head: string) =>
@@ -268,19 +279,79 @@ const forgetTasks = (text: string) => {
   for (const [, id] of text.matchAll(/<task-id>([^<]+)<\/task-id>/g)) if (id) backgrounds.delete(id)
 }
 
-const refresh = ($: EngineInterface) => {
-  const items = active()
-  const isBusy = items.length > 0 || compactingSince !== undefined
+// Credits `ms` to each entry in the position it held.
+export const occupy = (occupancy: Occupancy, seqs: number[], ms: number) => {
+  seqs.forEach((seq, position) => {
+    const holders = (occupancy[position] ??= new Map())
+    holders.set(seq, (holders.get(seq) ?? 0) + ms)
+  })
+}
+
+// Per position, the entry that held it longest (the newest when tied), each entry once. A position that stood empty
+// for longer than any entry held it shows nothing.
+export const dominant = (occupancy: Occupancy, windowMs: number) => {
+  const picked: number[] = []
+  for (const holders of occupancy) {
+    const empty = windowMs - [...holders.values()].reduce((sum, ms) => sum + ms, 0)
+    const [best] = [...holders].filter(([seq]) => !picked.includes(seq)).sort((a, b) => b[1] - a[1] || b[0] - a[0])
+    if (best && best[1] >= empty) picked.push(best[0])
+  }
+  return picked
+}
+
+const isBusy = () => layout.length > 0 || compactingSince !== undefined
+
+// Credits the time since the last call to the entries as they stood, then takes them as they stand now.
+const sample = (now: number) => {
+  const ms = Math.max(0, now - sampledAt)
+  occupy(occupancy, layout.map(item => item.seq), ms)
+  windowMs += ms
+  sampledAt = now
+  layout = active()
+  for (const item of layout) latest.set(item.seq, item)
+}
+
+const startWindow = () => {
+  occupancy = []
+  windowMs = 0
+  latest = new Map(layout.map(item => [item.seq, item]))
+}
+
+const show = ($: EngineInterface, frame: Frame) => {
+  shown = frame
+  const isEmpty = frame.items.length === 0 && frame.compactingSince === undefined
   // The terminal's spinner shows this line during a turn; VS Code's is untouched, so its status line shows it.
-  const text = isVscode ? stripText(items, compactingText(), statusColumns) : statusText(items, terminalCompactingText())
-  $.ui.status(isBusy && (!isTurn || isVscode) ? text : undefined)
+  const text = isVscode ? stripText(frame, compactingText(frame), statusColumns) : statusText(frame, terminalCompactingText(frame))
+  $.ui.status(!isEmpty && (!isTurn || isVscode) ? text : undefined)
   $.ui.invalidate('ui.render')
-  if (isBusy) {
-    ticker ??= $.clock.every(TICK_MS, () => refresh($))
+}
+
+// Once the second is up every entry changes together, and an idle line clears with them.
+const tick = ($: EngineInterface) => {
+  const now = Date.now()
+  sample(now)
+  if (isBusy()) {
+    show($, { at: now, items: dominant(occupancy, windowMs).flatMap(seq => latest.get(seq) ?? []), compactingSince })
   } else {
     ticker?.cancel()
     ticker = undefined
+    show($, { at: now, items: [] })
   }
+  startWindow()
+}
+
+// A change only draws when the line was idle: that frame starts the seconds the ticker then counts. `redraw` shows the
+// frame again, for a change of what the line may show that is no new content.
+const refresh = ($: EngineInterface, redraw = false) => {
+  sample(Date.now())
+  if (ticker) {
+    if (redraw) show($, shown)
+    return
+  }
+  if (!isBusy()) return
+  startWindow()
+  show($, { at: sampledAt, items: layout, compactingSince })
+  ticker = $.clock.every(TICK_MS, () => tick($))
 }
 
 export const register: Register = (on, options) => {
@@ -361,7 +432,7 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined) return next(e)
     isTurn = true
     isIdle = false
-    refresh($)
+    refresh($, true)
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -370,7 +441,7 @@ export const register: Register = (on, options) => {
     isTurn = false
     isIdle = true
     last = undefined
-    refresh($)
+    refresh($, true)
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -389,20 +460,19 @@ export const register: Register = (on, options) => {
   // VS Code keeps the engine's own spinner and shows the detail in the status line. Elsewhere one row rewrites the
   // engine's message, and a wrapped text goes in a card under the engine row.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
-    const items = active()
-    const compacting = terminalCompactingText()
+    const compacting = terminalCompactingText(shown)
     if (e.surface === 'vscode') {
       isVscode = true
       statusColumns = e.viewport?.columns
     }
-    if (e.surface === 'vscode' || (items.length === 0 && !compacting)) return next(e)
+    if (e.surface === 'vscode' || (shown.items.length === 0 && !compacting)) return next(e)
     // Keep the engine's own word (thinking, requesting, ...) first, unless a tool call is the thing running.
     const { message, word, mode } = e.props
     const lead = compacting ?? (mode === 'tool-use' ? undefined : (message ?? word))
-    const text = statusText(items, lead)
+    const text = statusText(shown, lead)
     if (!isWrapped(text, e.viewport?.columns)) return next({ ...e, props: { ...e.props, message: text, suffix: '' } })
     const { Box, Text } = $.ui.resolve(e)
     const row = await next(e)
-    return <Box flexDirection="column">{row}<Text>{statusText(items, compacting)}</Text></Box>
+    return <Box flexDirection="column">{row}<Text>{statusText(shown, compacting)}</Text></Box>
   })
 }
