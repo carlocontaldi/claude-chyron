@@ -1,4 +1,4 @@
-import type { On } from 'claude-code'
+import type { CommandRunInput, On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import { dominant, dropExpired, occupy, type Occupancy } from './register'
 
@@ -165,7 +165,7 @@ test('a wrapped spinner keeps sizing and positioning props off every Box above t
   }
 })
 
-const SUMMARY = { role: 'user', text: 'summary', toolUses: [] } as const
+const COMPACT = { command: 'compact', args: '' } as CommandRunInput
 
 test('on VS Code the spinner stays the engine\'s own, with its word unchanged', async ($, on) => {
   const nextFrame = frames(on)
@@ -251,20 +251,22 @@ test('on VS Code a compaction shows in the status line', async ($, on) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine</Text>
   })
-  on('session.compact', async () => {
+  on('command.run', { command: 'compact' }, async () => {
     await gate
-    return { messages: [SUMMARY] }
+    return { text: '' }
   })
   const ui = await $.ui.mount({ ...SPINNER, surface: 'vscode' })
   await ui.unmount()
 
-  const compacting = $.session.compact({ trigger: 'plugin', messages: [SUMMARY] })
+  const compacting = $.command.run(COMPACT)
   await pause()
   await nextFrame()
   expect(status?.replace(/\d+s/g, 'Ns')).toBe('🟠 Compacting conversation · Ns')
 
   release()
   await compacting
+  await nextFrame()
+  expect(status).toBeUndefined()
 })
 
 test('on the terminal the text stays under a wrapped engine row', async ($, on) => {
@@ -294,12 +296,12 @@ test('the spinner says Compacting while a compaction runs, then goes back to the
     const { Text } = $.ui.resolve(e)
     return <Text>engine</Text>
   })
-  on('session.compact', async () => {
+  on('command.run', { command: 'compact' }, async () => {
     await gate
-    return { messages: [SUMMARY] }
+    return { text: '' }
   })
 
-  const compacting = $.session.compact({ trigger: 'plugin', messages: [SUMMARY] })
+  const compacting = $.command.run(COMPACT)
   await pause()
   let ui = await $.ui.mount({ ...SPINNER, props: { ...SPINNER.props, mode: 'requesting' } })
   await ui.unmount()
@@ -311,6 +313,100 @@ test('the spinner says Compacting while a compaction runs, then goes back to the
   ui = await $.ui.mount(SPINNER)
   await ui.unmount()
   expect(drawn).toBeNull()
+})
+
+const compactingSpinner = (surface: 'terminal' | 'vscode', message: string | null) =>
+  ({ ...SPINNER, surface, props: { ...SPINNER.props, message } }) as const
+
+test('a compaction that only the spinner reports shows in the status line until the spinner stops saying so', async ($, on) => {
+  const nextFrame = frames(on)
+  const statuses: (string | undefined)[] = []
+  on('ui.status', ($, e) => {
+    statuses.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+
+  const compacting = await $.ui.mount(compactingSpinner('vscode', 'Compacting'))
+  await compacting.unmount()
+  await nextFrame()
+  expect(statuses.at(-1)?.replace(/\d+s/g, 'Ns')).toBe('🟠 Compacting conversation · Ns')
+
+  const done = await $.ui.mount(compactingSpinner('vscode', null))
+  await done.unmount()
+  await nextFrame()
+  expect(statuses.at(-1)).toBeUndefined()
+})
+
+test('on the terminal the spinner text the engine draws for a compaction is replaced by the one with the clock', async ($, on) => {
+  const nextFrame = frames(on)
+  let drawn: unknown
+  on('ui.render', ($, e) => {
+    drawn = (e.props as { message?: unknown }).message
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+
+  const ui = await $.ui.mount(compactingSpinner('terminal', 'Compacting conversation'))
+  await ui.unmount()
+  await nextFrame()
+  const again = await $.ui.mount(compactingSpinner('terminal', 'Compacting conversation'))
+  await again.unmount()
+  expect(String(drawn).replace(/\d+s/g, 'Ns')).toBe('Compacting conversation 🦉 Ns')
+})
+
+test('a spinner that said compacting and is not drawn again does not keep the compaction on after the command ends', async ($, on) => {
+  const nextFrame = frames(on)
+  let status: string | undefined
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  on('ui.status', ($, e) => {
+    status = e.text
+    return { value: undefined }
+  })
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('command.run', { command: 'compact' }, async () => {
+    await gate
+    return { text: '' }
+  })
+
+  const running = $.command.run(COMPACT)
+  await pause()
+  const ui = await $.ui.mount(compactingSpinner('vscode', 'Compacting'))
+  await ui.unmount()
+
+  release()
+  await running
+  await nextFrame()
+  expect(status).toBeUndefined()
+})
+
+test('a spinner that said compacting does not keep the compaction on after the turn completes', async ($, on) => {
+  const nextFrame = frames(on)
+  let status: string | undefined
+  on('ui.status', ($, e) => {
+    status = e.text
+    return { value: undefined }
+  })
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('turn.complete', () => ({ text: '' }))
+
+  const ui = await $.ui.mount(compactingSpinner('vscode', 'Compacting'))
+  await ui.unmount()
+  expect(status).toBeDefined()
+
+  await $.turn.complete({ reason: 'answer', answer: '', durationMs: 1, isAborted: false, turnId: 't1' })
+  await nextFrame()
+  expect(status).toBeUndefined()
 })
 
 const usage = (output: number, context = 1) => ({
@@ -1028,7 +1124,6 @@ test('the owl does not read the text it follows: after an emoji in a summary it 
 
 test('with the owl option off a compaction keeps its dot', { options: { show_owl: false } }, async ($, on) => {
   const nextFrame = frames(on)
-  const summary = { role: 'user' as const, text: 'summary', toolUses: [] }
   let drawn: unknown
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
@@ -1037,12 +1132,12 @@ test('with the owl option off a compaction keeps its dot', { options: { show_owl
     const { Text } = $.ui.resolve(e)
     return <Text>engine</Text>
   })
-  on('session.compact', async () => {
+  on('command.run', { command: 'compact' }, async () => {
     await gate
-    return { messages: [summary] }
+    return { text: '' }
   })
 
-  const compacting = $.session.compact({ trigger: 'plugin', messages: [summary] })
+  const compacting = $.command.run(COMPACT)
   await pause()
   await nextFrame()
   const ui = await $.ui.mount({ ...SPINNER, props: { ...SPINNER.props, mode: 'requesting' } })
@@ -1055,7 +1150,6 @@ test('with the owl option off a compaction keeps its dot', { options: { show_owl
 
 test('on the terminal a compaction with no turn running shows in the status line, the owl in place of the dot', async ($, on) => {
   const nextFrame = frames(on)
-  const summary = { role: 'user' as const, text: 'summary', toolUses: [] }
   let status: string | undefined
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
@@ -1067,14 +1161,14 @@ test('on the terminal a compaction with no turn running shows in the status line
     const { Text } = $.ui.resolve(e)
     return <Text>engine</Text>
   })
-  on('session.compact', async () => {
+  on('command.run', { command: 'compact' }, async () => {
     await gate
-    return { messages: [summary] }
+    return { text: '' }
   })
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
 
-  const compacting = $.session.compact({ trigger: 'plugin', messages: [summary] })
+  const compacting = $.command.run(COMPACT)
   await pause()
   await nextFrame()
   expect(status?.replace(/\d+s/g, 'Ns')).toBe('Compacting conversation 🦉 Ns')
@@ -1157,7 +1251,6 @@ test('the status changes once a second: calls inside it draw nothing, the tick d
 })
 
 test('the line goes idle at the next tick, not when the work ends', async ($, on) => {
-  const summary = { role: 'user' as const, text: 'summary', toolUses: [] }
   const clock = mock.clock(on)
   const statuses: (string | undefined)[] = []
   let release!: () => void
@@ -1170,14 +1263,14 @@ test('the line goes idle at the next tick, not when the work ends', async ($, on
     const { Text } = $.ui.resolve(e)
     return <Text>engine</Text>
   })
-  on('session.compact', async () => {
+  on('command.run', { command: 'compact' }, async () => {
     await gate
-    return { messages: [summary] }
+    return { text: '' }
   })
   const ui = await $.ui.mount({ ...SPINNER, surface: 'vscode' })
   await ui.unmount()
 
-  const compacting = $.session.compact({ trigger: 'plugin', messages: [summary] })
+  const compacting = $.command.run(COMPACT)
   await pause()
   release()
   await compacting
@@ -1243,7 +1336,6 @@ test('a turn starting or ending while the line ticks changes at once whether the
 })
 
 test('the ticker stops once the line is idle and the next busy period draws at once and ticks again', async ($, on) => {
-  const summary = { role: 'user' as const, text: 'summary', toolUses: [] }
   const clock = mock.clock(on)
   const statuses: (string | undefined)[] = []
   on('ui.status', ($, e) => {
@@ -1254,17 +1346,17 @@ test('the ticker stops once the line is idle and the next busy period draws at o
     const { Text } = $.ui.resolve(e)
     return <Text>engine</Text>
   })
-  on('session.compact', () => ({ messages: [summary] }))
+  on('command.run', { command: 'compact' }, () => ({ text: '' }))
   const ui = await $.ui.mount({ ...SPINNER, surface: 'vscode' })
   await ui.unmount()
 
-  await $.session.compact({ trigger: 'plugin', messages: [summary] })
+  await $.command.run(COMPACT)
   expect(statuses.length).toBe(1)
   await clock.advance(1000)
   expect(statuses.length).toBe(2)
   expect(statuses[1]).toBeUndefined()
 
-  await $.session.compact({ trigger: 'plugin', messages: [summary] })
+  await $.command.run(COMPACT)
   expect(statuses.length).toBe(3)
   expect(statuses[2]).toBeDefined()
   await clock.advance(1000)

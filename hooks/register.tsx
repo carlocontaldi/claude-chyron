@@ -18,6 +18,8 @@ const TURN_HOLD_MS = 600_000
 // A background task whose notification never comes (stopped from the UI, or lost) would show, and keep the ticker on, for good.
 const BACKGROUND_TTL_MS = 6 * 3_600_000
 const MAX_REMEMBERED = 256
+// What the spinner says while a compaction runs: `Compacting conversation` on the terminal, `Compacting` in VS Code.
+const COMPACTING_MESSAGE = /^compacting/i
 // Cells the engine draws before the message: the spinner mark and the "chyron plugin " attribution.
 const SPINNER_CHROME_CELLS = 17
 
@@ -65,6 +67,10 @@ let last: (Call & { endedAt: number }) | undefined
 let isTurn = false
 let isIdle = false
 let compactingSince: number | undefined
+// A compaction is read from the `compact` command in flight and from the spinner text the engine draws while one runs.
+// `session.compact` is not hooked: Claude Code's `cc-plugin-sec-default` keeps it from mods.
+let isCompactCommand = false
+let isSpinnerCompacting = false
 let ticker: Timer | undefined
 let isVscode = false
 let statusColumns: number | undefined
@@ -354,6 +360,13 @@ const refresh = ($: EngineInterface, redraw = false) => {
   ticker = $.clock.every(TICK_MS, () => tick($))
 }
 
+const syncCompacting = ($: EngineInterface) => {
+  const isCompacting = isCompactCommand || isSpinnerCompacting
+  if (isCompacting === (compactingSince !== undefined)) return
+  compactingSince = isCompacting ? Date.now() : undefined
+  refresh($)
+}
+
 export const register: Register = (on, options) => {
   isOwlOn = options.show_owl !== false
 
@@ -441,25 +454,30 @@ export const register: Register = (on, options) => {
     isTurn = false
     isIdle = true
     last = undefined
+    isSpinnerCompacting = false
+    syncCompacting($)
     refresh($, true)
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  on('session.compact', async ($, e, next) => {
-    if (e.agentId !== undefined || e.trigger === 'precompute') return next(e)
-    compactingSince = Date.now()
-    refresh($)
+  on('command.run', { command: 'compact' }, async ($, e, next) => {
+    isCompactCommand = true
+    syncCompacting($)
     try {
       return await next(e)
     } finally {
-      compactingSince = undefined
-      refresh($)
+      isCompactCommand = false
+      // A spinner that is not drawn again when the command ends can no longer say that it ended.
+      isSpinnerCompacting = false
+      syncCompacting($)
     }
   }).catch(($, e, next) => next(e))
 
   // VS Code keeps the engine's own spinner and shows the detail in the status line. Elsewhere one row rewrites the
   // engine's message, and a wrapped text goes in a card under the engine row.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
+    isSpinnerCompacting = COMPACTING_MESSAGE.test(e.props.message ?? '')
+    syncCompacting($)
     const compacting = terminalCompactingText(shown)
     if (e.surface === 'vscode') {
       isVscode = true
