@@ -14,7 +14,7 @@
 A chyron says what is happening without stopping the broadcast. Claude Chyron does the same for Claude Code: a mod (plugin name `chyron`) that sits between the Focus view and the standard view, showing the latest running tool, background task or subagent call without opening the full transcript.
 
 <p1 align="center">
-  <img src="assets/claude-chyron-banner.png" alt="" width="1280"><br>
+  <img src="assets/chyron-banner.png" alt="" width="1280"><br>
 </p1>
 
 <br>
