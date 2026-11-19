@@ -17,8 +17,6 @@ A chyron says what is happening without stopping the broadcast. Claude Chyron do
   <img src="assets/chyron-banner.png" alt="" width="1280"><br>
 </p1>
 
-<br>
-
 **Token-free.** It makes no model calls and passes every prompt, tool call and response through unchanged, so it adds nothing to the context and costs none of your usage. Even its token counts are read from the usage the engine already reports.
 
 **Status line** while something runs or has just run, one entry for every running call and background task, latest start first: `🦉 Bash 12s · <description or command> ⏳ Agent 340s · <description>`. The last finished call stays as `✓ … done 4s ago` through the turn, so a chain of quick calls does not flash and vanish.
