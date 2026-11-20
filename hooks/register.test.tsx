@@ -767,6 +767,40 @@ test('an empty description does not hide the command', async ($, on) => {
   expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ✓ Bash done Ns ago · make test')
 })
 
+test('a call that ends after its turn gets one frame, then the line clears', async ($, on) => {
+  const nextFrame = frames(on)
+  let drawn = ''
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  on('ui.render', ($, e) => {
+    drawn = String(e.props.message)
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('tool.call', async () => {
+    await gate
+    return { result: {} }
+  })
+  on('turn.complete', () => ({ text: '' }))
+
+  const running = $.tool.call({ tool: 'Bash', command: 'make', description: 'build' })
+  await pause()
+  await $.turn.complete({ reason: 'answer', answer: '', durationMs: 1, isAborted: false, turnId: 't1' })
+  release()
+  await running
+
+  await nextFrame()
+  const ui = await $.ui.mount(SPINNER)
+  await ui.unmount()
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 ✓ Bash done Ns ago · build')
+
+  await pause(1000) // the test clock does not move Date.now, so the second the call may stay is waited for real
+  await nextFrame()
+  const later = await $.ui.mount(SPINNER)
+  await later.unmount()
+  expect(drawn).toBe('null')
+})
+
 test('a background task whose notification never came is dropped after six hours', () => {
   const hour = 3_600_000
   const tasks = new Map([['old', { startedAt: 0 }], ['recent', { startedAt: 2 * hour }]])

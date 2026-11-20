@@ -211,7 +211,8 @@ const active = (): Item[] => {
     .map(({ call, isBackground }) => callItem(call, isBackground))
     .sort((a, b) => b.startedAt - a.startedAt || b.seq - a.seq)
   const isHeld = last && !isIdle && Date.now() - last.endedAt < (isTurn ? TURN_HOLD_MS : HOLD_MS)
-  return items.length === 0 && last && isHeld ? [callItem(last, false)] : items
+  const isJustDone = last && Date.now() - last.endedAt < TICK_MS // a call that ends while idle still gets one frame
+  return items.length === 0 && last && (isHeld || isJustDone) ? [callItem(last, false)] : items
 }
 
 const withTokens = (text: string, tokens?: string) => (tokens ? `${text} ${tokens}` : text)
