@@ -1,6 +1,6 @@
 {
   "name": "chyron",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Shows the latest running tool, background task or subagent call in the status line. Token-free: no model calls.",
   "author": { "name": "Carlo Contaldi" },
   "license": "MIT",
