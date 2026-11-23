@@ -1,6 +1,6 @@
 import type { CommandRunInput, On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import { dominant, dropExpired, occupy, type Occupancy } from './register'
+import { count, dominant, dropExpired, occupy, seconds, type Occupancy } from './register'
 
 const SPINNER = {
   plugin: 'chyron',
@@ -586,7 +586,7 @@ test('a background agent keeps counting its requests after its launch returned',
   await nextFrame()
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
-  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('⏳ Agent Ns · digest Σ21k')
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('⏳ Agent Ns · digest Σ20k')
 })
 
 test("a subagent's tool call shows the output tokens of the subagent's request", async ($, on) => {
@@ -622,7 +622,7 @@ test("a subagent's tool call shows the output tokens of the subagent's request",
   await running
 })
 
-test('a count rounds up to two digits, carrying 9,950 over to 10k', async ($, on) => {
+test('a count rounds to two digits, carrying 9,950 over to 10k', async ($, on) => {
   const nextFrame = frames(on)
   let drawn = ''
   let release!: () => void
@@ -653,6 +653,43 @@ test('a count rounds up to two digits, carrying 9,950 over to 10k', async ($, on
 
   release()
   await running
+})
+
+test('a count keeps two digits, one decimal below 10 and no trailing zero', () => {
+  expect([0, 7, 99, 1000, 1001, 1049, 1050, 1500, 9949].map(count)).toEqual(['0', '7', '99', '1k', '1k', '1k', '1.1k', '1.5k', '9.9k'])
+  expect([9950, 10_000, 99_499, 1_200_000, 1_540_000].map(count)).toEqual(['10k', '10k', '99k', '1.2M', '1.5M'])
+})
+
+test('a count keeps three digits only from 100 to 994 in its unit, 995 goes to the next', () => {
+  expect([100, 151, 994, 995, 999].map(count)).toEqual(['100', '151', '994', '1k', '1k'])
+  expect([99_500, 150_000, 994_000, 994_499, 994_500, 995_000].map(count)).toEqual(['100k', '150k', '994k', '994k', '1M', '1M'])
+})
+
+test('a count uses k, M, B and T', () => {
+  expect([1_000_000, 994_000_000, 995_000_000, 1_500_000_000, 2_000_000_000_000].map(count)).toEqual(['1M', '994M', '1B', '1.5B', '2T'])
+})
+
+test('a fraction keeps two digits, never the third', () => {
+  expect([0.123, 3.14159, 12.5, 150.5, 994.6, 1234.5].map(count)).toEqual(['0.12', '3.1', '13', '150', '990', '1.2k'])
+})
+
+test('a time rounds up to the whole second', () => {
+  expect([0, 1000, 1001, 1100, 59_000].map(seconds)).toEqual(['0s', '1s', '2s', '2s', '59s'])
+  expect([150_100, 150_500, 151_000].map(seconds)).toEqual(['2m 31s', '2m 31s', '2m 31s'])
+})
+
+test('a time of a minute or more shows minutes and hours, leaving out the zero parts', () => {
+  expect([60_000, 61_000, 3_599_000, 3_600_000, 3_601_000, 3_660_000].map(seconds)).toEqual(['1m', '1m 1s', '59m 59s', '1h', '1h 1s', '1h 1m'])
+  expect([3_766_000, 90_000_000].map(seconds)).toEqual(['1h 2m 46s', '25h'])
+})
+
+test('hours follow the rounding of a count', () => {
+  expect([994, 995, 5123, 99_500].map(hours => seconds(hours * 3_600_000))).toEqual(['994h', '1kh', '5.1kh', '100kh'])
+})
+
+test('minutes and seconds are dropped once the hours are abbreviated', () => {
+  expect(seconds(994 * 3_600_000 + 5 * 60_000 + 1000)).toBe('994h 5m 1s')
+  expect(seconds(5123 * 3_600_000 + 166_000)).toBe('5.1kh')
 })
 
 test('the VS Code status line gives each summary an equal share of what the two rows have left', async ($, on) => {
@@ -925,6 +962,41 @@ test('an agent shows how many tools it has called and the latest one', async ($,
   const ui = await $.ui.mount(SPINNER)
   await ui.unmount()
   expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 Agent Ns · 2 tools · digest 🦉 Read: /a.py Σ1.2k')
+
+  release()
+  await running
+})
+
+test('an agent that has called a thousand tools or more shows the count abbreviated', async ($, on) => {
+  const nextFrame = frames(on)
+  let drawn = ''
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  on('ui.render', ($, e) => {
+    drawn = String(e.props.message)
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('agent.spawn', () => ({ model: 'm', agentId: 'sub1' }))
+  on('turn.step', async function* (_, e) {
+    return yield* toolRequest(e, 'Read', '{"file_path":"/a.py"}')
+  })
+  on('tool.call', async () => {
+    await gate
+    return { result: {} }
+  })
+
+  const running = $.tool.call({ tool: 'Agent', description: 'digest', prompt: 'p', tool_use_id: 'toolu_ag' })
+  await pause()
+  await $.agent.spawn({ prompt: 'p', description: 'digest', tool_use_id: 'toolu_ag' } as never)
+  for (let index = 0; index < 1234; index++) {
+    await drain($.turn.step({ turnId: 'sub-t', index, model: 'm', messageCount: 1, agentId: 'sub1' }))
+  }
+
+  await nextFrame()
+  const ui = await $.ui.mount(SPINNER)
+  await ui.unmount()
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('🦉 Agent Ns · 1.2k tools · digest 🦉 Read: /a.py Σ124k')
 
   release()
   await running

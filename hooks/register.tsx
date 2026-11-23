@@ -93,15 +93,28 @@ const headline = (input: Record<string, unknown>) => {
   return oneLine(String(fields.find(value => value != null && String(value).trim() !== '') ?? ''), SUMMARY_LIMIT)
 }
 
-const seconds = (ms: number) => `${Math.round(ms / 1000)}s`
+// Whole seconds, rounded up, as hours, minutes and seconds without the zero parts: 1h 2m 46s, 2m.
+// Hours that `count` abbreviates stand alone (5.1kh).
+export const seconds = (ms: number) => {
+  const total = Math.ceil(ms / 1000)
+  const hours = Math.floor(total / 3600)
+  if (count(hours) !== String(hours)) return `${count(hours)}h`
+  const parts = [[hours, 'h'], [Math.floor(total / 60) % 60, 'm'], [total % 60, 's']] as const
+  return parts.filter(([n]) => n > 0).map(([n, unit]) => `${n}${unit}`).join(' ') || '0s'
+}
 
-// Two digits where a unit allows (1.5k, 39k, 1.2M), rounded up so a count never reads lower than it is.
-const count = (n: number) => {
-  if (n < 1000) return String(n)
-  if (Math.ceil(n / 100) < 100) return `${(Math.ceil(n / 100) / 10).toFixed(1)}k`
-  if (Math.ceil(n / 1000) < 1000) return `${Math.ceil(n / 1000)}k`
-  if (Math.ceil(n / 100_000) < 100) return `${(Math.ceil(n / 100_000) / 10).toFixed(1)}M`
-  return `${Math.ceil(n / 1_000_000)}M`
+const UNITS = ['', 'k', 'M', 'B', 'T']
+
+// Two non-zero digits at most (1.5k, 39k, 1.2M), three only for 100 to 994 in a unit (994k); 995k rounds to 1M.
+// A fraction is cut to two digits first, so it never earns the third.
+export const count = (n: number) => {
+  const whole = Number.isInteger(n) ? n : Number(n.toPrecision(2))
+  if (!Number.isInteger(whole)) return String(whole)
+  let unit = 0
+  while (unit < UNITS.length - 1 && Math.round(whole / 1000 ** unit) > 994) unit++
+  const scale = 1000 ** unit
+  const tenths = Math.round((whole * 10) / scale)
+  return `${tenths < 100 ? tenths / 10 : Math.round(whole / scale)}${UNITS[unit]}`
 }
 
 // Keeps the newest MAX_REMEMBERED entries: a call that never ran or an agent that never finished is not pruned elsewhere.
@@ -159,7 +172,7 @@ const tokenText = ({ tool, progress, step }: Call) => {
 }
 
 const toolsText = ({ progress }: Call) =>
-  progress?.tools ? `${progress.tools} ${progress.tools === 1 ? 'tool' : 'tools'}` : undefined
+  progress?.tools ? `${count(progress.tools)} ${progress.tools === 1 ? 'tool' : 'tools'}` : undefined
 
 const clock = ({ startedAt, endedAt }: Item, at: number) =>
   endedAt === undefined ? seconds(at - startedAt) : `done ${seconds(at - endedAt)} ago`
