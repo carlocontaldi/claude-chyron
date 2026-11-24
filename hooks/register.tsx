@@ -344,6 +344,23 @@ const forgetTasks = (text: string) => {
   }
 }
 
+// A tool the API runs inside the request (the advisor) raises no tool call, so it shows once the request has ended, as the
+// call that just finished.
+const noteServerTools = (uses: readonly { name: string; startedAt: number; endedAt?: number }[]) => {
+  const endedAt = Date.now()
+  for (const use of uses) {
+    const took = use.endedAt === undefined ? undefined : use.endedAt - use.startedAt
+    last = {
+      tool: `${use.name.charAt(0).toUpperCase()}${use.name.slice(1)}`,
+      input: took === undefined ? {} : { description: `took ${seconds(took)}` },
+      startedAt: endedAt - (took ?? 0),
+      seq: launches++,
+      isSubagent: false,
+      endedAt,
+    }
+  }
+}
+
 // An agent that works with no Agent call to show it (the session continued it) gets an entry of its own, as a background
 // agent does; its notification clears it, or its silence.
 const adopt = (agentId: string) => {
@@ -501,8 +518,9 @@ export const register: Register = (on, options) => {
       adopt(e.agentId)
       refresh($)
     }
+    const stream = next(e)
     try {
-      for await (const chunk of next(e)) {
+      for await (const chunk of stream) {
         // Counting is best effort: a failure here must not cut the response short.
         try {
           tally(step, e.agentId, chunk)
@@ -510,6 +528,13 @@ export const register: Register = (on, options) => {
         } catch {}
         yield chunk
       }
+      const result = await stream.result.catch(() => undefined)
+      if (e.agentId === undefined && result?.serverToolUses?.length) {
+        noteServerTools(result.serverToolUses)
+        isIdle = false
+        refresh($)
+      }
+      return result
     } finally {
       // Calls outlive their request in `steps`, and the inputs they hold can be large.
       step.uses.clear()

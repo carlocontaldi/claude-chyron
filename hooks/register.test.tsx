@@ -1229,6 +1229,27 @@ test('an entry made for an agent that went quiet is dropped, unless one of its c
   expect([replaced.tasks.size, replaced.adopted.size]).toEqual([1, 0])
 })
 
+test('a tool the API ran inside the request shows as the call that just finished, with how long it took', async ($, on) => {
+  const nextFrame = frames(on)
+  let drawn = ''
+  on('ui.render', ($, e) => {
+    drawn = String(e.props.message)
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('turn.step', async function* (_, e) {
+    yield { kind: 'stop', stopReason: 'end_turn', usage: usage(0) }
+    return { ...answer(e), serverToolUses: [{ id: 'srvtoolu_1', name: 'advisor', input: {}, startedAt: 1_000, endedAt: 48_000 }] }
+  })
+
+  await drain($.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 }))
+
+  await nextFrame()
+  const ui = await $.ui.mount(SPINNER)
+  await ui.unmount()
+  expect(drawn.replace(/\d+s ago/g, 'Ns ago')).toBe('🦉 ✓ Advisor done Ns ago · took 47s')
+})
+
 test('with more than two entries each shows only its main part, without the agent\'s latest tool', async ($, on) => {
   const nextFrame = frames(on)
   let status: string | undefined
