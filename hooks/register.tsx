@@ -270,19 +270,35 @@ const summaryShares = (lengths: number[], room: number) => {
   return shares
 }
 
+// How many entries fit the room: each takes its fixed parts and the least summary, with a ` ┃ ` between them and
+// a `+N more` for the rest. At least one is always shown.
+export const entriesThatFit = (minimums: number[], room: number) => {
+  for (let count = minimums.length; count > 1; count--) {
+    const more = minimums.length - count
+    const used = minimums.slice(0, count).reduce((sum, minimum) => sum + minimum, 0) + 3 * (count - 1) + (more ? 3 + `+${more} more`.length : 0)
+    if (used <= room) return count
+  }
+  return Math.min(1, minimums.length)
+}
+
 // VS Code's status line is plain grey text: coloured emoji mark the state (so no owl leads it) and tool names are upper case. The summaries
 // share the room the two rows have left after the fixed parts, so the rows are filled and nothing is cut early.
-const stripText = ({ items, at }: Frame, lead?: string, columns = STATUS_FALLBACK_COLUMNS) => {
-  const heads = items.map(item => {
+const stripText = ({ items: all, at }: Frame, lead?: string, columns = STATUS_FALLBACK_COLUMNS) => {
+  const headOf = (item: Item) => {
     const state = item.isBackground ? '⏳' : item.endedAt === undefined ? '🟠' : '🟢'
     return [`${state} ${item.name.toUpperCase()} ${clock(item, at)}`, item.tools].filter(Boolean).join(' · ')
-  })
+  }
+  const fixedOf = (item: Item) =>
+    headOf(item).length + (item.summary || item.activity ? 3 : 0) + (item.summary && item.activity ? 3 : 0) + (item.tokens ? 1 + item.tokens.length : 0)
   const leadText = lead && `🟠 ${lead}`
-  const fixedOf = (item: Item, head: string) =>
-    head.length + (item.summary || item.activity ? 3 : 0) + (item.summary && item.activity ? 3 : 0) + (item.tokens ? 1 + item.tokens.length : 0)
-  const separators = 3 * Math.max(0, items.length - (leadText ? 0 : 1))
-  const fixed = (leadText?.length ?? 0) + separators + items.reduce((sum, item, index) => sum + fixedOf(item, heads[index] ?? ''), 0)
   const capacity = Math.floor(columns * STATUS_CHARS_PER_COLUMN * STATUS_ROWS * STATUS_FILL) - STATUS_PREFIX_CHARS
+  const minimums = all.map(item => fixedOf(item) + Math.min(item.summary.length, MIN_SUMMARY_CHARS) + Math.min(item.activity?.length ?? 0, MIN_SUMMARY_CHARS))
+  const count = entriesThatFit(minimums, capacity - (leadText ? leadText.length + 3 : 0))
+  const items = all.slice(0, count)
+  const more = all.length > count ? `+${all.length - count} more` : undefined
+  const heads = items.map(headOf)
+  const separators = 3 * Math.max(0, items.length - (leadText ? 0 : 1)) + (more ? more.length + 3 : 0)
+  const fixed = (leadText?.length ?? 0) + separators + items.reduce((sum, item) => sum + fixedOf(item), 0)
   const shares = summaryShares(items.flatMap(item => [item.summary.length, item.activity?.length ?? 0]), capacity - fixed)
   return [
     leadText,
@@ -290,6 +306,7 @@ const stripText = ({ items, at }: Frame, lead?: string, columns = STATUS_FALLBAC
       const text = detail(oneLine(item.summary, shares[2 * index] ?? 0), item.activity && oneLine(item.activity, shares[2 * index + 1] ?? 0))
       return withTokens([heads[index], text].filter(Boolean).join(' · '), item.tokens)
     }),
+    more,
   ]
     .filter(Boolean)
     .join(' ┃ ')
