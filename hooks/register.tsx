@@ -337,7 +337,11 @@ const startWindow = () => {
   latest = new Map(layout.map(item => [item.seq, item]))
 }
 
-const show = ($: EngineInterface, frame: Frame) => {
+// With more than two entries each keeps its main part: an agent's latest tool, after the `▸`, is left out.
+const mainParts = (items: Item[]) => (items.length > 2 ? items.map(item => ({ ...item, activity: undefined })) : items)
+
+const show = ($: EngineInterface, drawn: Frame) => {
+  const frame = { ...drawn, items: mainParts(drawn.items) }
   shown = frame
   const isEmpty = frame.items.length === 0 && frame.compactingSince === undefined
   // The terminal's spinner shows this line during a turn; VS Code's is untouched, so its status line shows it.

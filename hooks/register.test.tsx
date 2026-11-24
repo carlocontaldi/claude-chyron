@@ -1139,6 +1139,53 @@ test('on VS Code the tool count follows the clock and the summary and the latest
   expect(text.length).toBeLessThanOrEqual(206 - 15)
 })
 
+test('with more than two entries each shows only its main part, without the agent\'s latest tool', async ($, on) => {
+  const nextFrame = frames(on)
+  let status: string | undefined
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  on('ui.status', ($, e) => {
+    status = e.text
+    return { value: undefined }
+  })
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('agent.spawn', (_, e) => ({ model: 'm', agentId: `sub-${e.tool_use_id}` }))
+  on('turn.step', async function* (_, e) {
+    return yield* toolRequest(e, 'Bash', '{"description":"build"}')
+  })
+  on('tool.call', async () => {
+    await gate
+    return { result: {} }
+  })
+  const ui = await $.ui.mount({ ...SPINNER, surface: 'vscode' })
+  await ui.unmount()
+
+  const launched: Promise<unknown>[] = []
+  const launch = async (name: string) => {
+    const id = `toolu_${name}`
+    launched.push($.tool.call({ tool: 'Agent', description: name, prompt: 'p', tool_use_id: id }))
+    await pause()
+    await $.agent.spawn({ prompt: 'p', description: name, tool_use_id: id } as never)
+    await drain($.turn.step({ turnId: `t-${name}`, index: 0, model: 'm', messageCount: 1, agentId: `sub-${id}` }))
+  }
+
+  await launch('one')
+  await launch('two')
+  await nextFrame()
+  expect(status?.match(/▸ Bash: build/g)).toHaveLength(2)
+
+  await launch('three')
+  await nextFrame()
+  expect(status).not.toContain('▸')
+  expect(status?.match(/AGENT/g)).toHaveLength(3)
+
+  release()
+  await Promise.all(launched)
+})
+
 test('a background agent keeps its tool count and latest tool after its launch returned, and hides its inner calls', async ($, on) => {
   const nextFrame = frames(on)
   let drawn = ''
