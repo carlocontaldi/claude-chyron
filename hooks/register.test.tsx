@@ -1,6 +1,6 @@
 import type { CommandRunInput, On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import { count, dominant, dropExpired, entriesThatFit, occupy, seconds, type Occupancy } from './register'
+import { count, dominant, dropExpired, dropQuiet, entriesThatFit, occupy, seconds, type Occupancy } from './register'
 
 const SPINNER = {
   plugin: 'chyron',
@@ -609,6 +609,9 @@ test("a subagent's tool call shows the output tokens of the subagent's request",
     return { result: {} }
   })
 
+  on('agent.spawn', () => ({ model: 'm', agentId: 'sub1' }))
+  // A workflow's agents have no entries of their own, so their calls show alone.
+  await $.agent.spawn({ prompt: 'p', description: 'step', tool_use_id: 'toolu_wf', workflow: 'run' } as never)
   await drain($.turn.step({ turnId: 'sub-t', index: 0, model: 'm', messageCount: 1, agentId: 'sub1' }))
   const running = $.tool.call({ tool: 'Bash', command: 'ls', description: 'list', tool_use_id: 'toolu_sub', agentId: 'sub1' })
   await pause()
@@ -904,9 +907,11 @@ test('the totals of subagents that finished long ago are forgotten once newer on
     return { result: {} }
   })
 
-  for (let index = 0; index < 300; index++) {
-    await drain($.turn.step({ turnId: `t${index}`, index: 0, model: 'm', messageCount: 1, agentId: `sub${index}` }))
-  }
+  const ids = Array.from({ length: 300 }, (_, index) => `sub${index}`)
+  for (const id of ids) await drain($.turn.step({ turnId: `t-${id}`, index: 0, model: 'm', messageCount: 1, agentId: id }))
+  // They have reported by now: their notifications clear the entries their steps made.
+  const reports = ids.map(id => `<task-notification>\n<task-id>${id}</task-id>\n</task-notification>`).join('')
+  await $.session.append({ ...notification('x'), message: { type: 'user', content: [{ type: 'text', text: reports }] } })
   const oldest = $.tool.call({ tool: 'Agent', description: 'oldest', prompt: 'p', tool_use_id: 'toolu_a' })
   await pause()
   await $.agent.spawn({ prompt: 'p', description: 'oldest', tool_use_id: 'toolu_a' } as never)
@@ -1137,6 +1142,91 @@ test('on VS Code the tool count follows the clock and the summary and the latest
   expect(text).toMatch(/^🟢 AGENT done Ns ago · 1 tool · d{40,}… ▸ Bash: a{40,}… Σ1\.1k$/)
   // Two rows of 64 reported columns hold 206 characters, 15 of them the panel's prefix.
   expect(text.length).toBeLessThanOrEqual(206 - 15)
+})
+
+test('an agent the session continues has an entry of its own, which its notification clears', async ($, on) => {
+  const nextFrame = frames(on)
+  let drawn = ''
+  on('ui.render', ($, e) => {
+    drawn = String(e.props.message)
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  on('agent.spawn', () => ({ model: 'm', agentId: 'sub1' }))
+  on('turn.step', async function* (_, e) {
+    return yield* toolRequest(e, 'Bash', '{"description":"list files"}')
+  })
+  on('tool.call', async () => {
+    await gate
+    return { result: { status: 'async_launched', agentId: 'sub1' } }
+  })
+
+  // The session launched the agent and it reported; now the session continues it, with no Agent call to show it.
+  const launching = $.tool.call({ tool: 'Agent', description: 'digest', prompt: 'p', tool_use_id: 'toolu_ag' })
+  await pause()
+  await $.agent.spawn({ prompt: 'p', description: 'digest', tool_use_id: 'toolu_ag' } as never)
+  release()
+  await launching
+  await $.session.append(notification('sub1'))
+  await drain($.turn.step({ turnId: 'again', index: 0, model: 'm', messageCount: 1, agentId: 'sub1' }))
+
+  await nextFrame()
+  const ui = await $.ui.mount(SPINNER)
+  await ui.unmount()
+  expect(drawn.replace(/\d+s/g, 'Ns')).toBe('⏳ Agent Ns · 1 tool · digest 🦉 Bash: list files Σ1.1k')
+
+  await $.session.append(notification('sub1'))
+  await nextFrame()
+  const again = await $.ui.mount(SPINNER)
+  await again.unmount()
+  expect(drawn).not.toContain('⏳')
+})
+
+test('the agents of a workflow are not given entries of their own', async ($, on) => {
+  const nextFrame = frames(on)
+  let drawn = ''
+  on('ui.render', ($, e) => {
+    drawn = String(e.props.message)
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('agent.spawn', () => ({ model: 'm', agentId: 'wf1' }))
+  on('turn.step', async function* (_, e) {
+    return yield* toolRequest(e, 'Bash', '{"description":"list files"}')
+  })
+  on('tool.call', () => ({ result: {} }))
+
+  await $.agent.spawn({ prompt: 'p', description: 'step', tool_use_id: 'toolu_wf', workflow: 'run' } as never)
+  await drain($.turn.step({ turnId: 'wf-t', index: 0, model: 'm', messageCount: 1, agentId: 'wf1' }))
+
+  await nextFrame()
+  const ui = await $.ui.mount(SPINNER)
+  await ui.unmount()
+  expect(drawn).not.toContain('Agent')
+})
+
+test('an entry made for an agent that went quiet is dropped, unless one of its calls is running', () => {
+  const call = { progress: { tools: 1 } }
+  const entries = () => ({ adopted: new Map([['a', { call, seenAt: 1000 }]]), tasks: new Map<string, unknown>([['a', call]]) })
+
+  const fresh = entries()
+  dropQuiet(fresh.adopted, fresh.tasks, () => false, 1000 + 179_000)
+  expect(fresh.tasks.size).toBe(1)
+
+  const quiet = entries()
+  dropQuiet(quiet.adopted, quiet.tasks, () => false, 1000 + 181_000)
+  expect([quiet.tasks.size, quiet.adopted.size]).toEqual([0, 0])
+
+  const busy = entries()
+  dropQuiet(busy.adopted, busy.tasks, () => true, 1000 + 181_000)
+  expect(busy.tasks.size).toBe(1)
+
+  const replaced = entries()
+  replaced.tasks.set('a', { progress: call.progress })
+  dropQuiet(replaced.adopted, replaced.tasks, () => false, 1000 + 181_000)
+  expect([replaced.tasks.size, replaced.adopted.size]).toEqual([1, 0])
 })
 
 test('with more than two entries each shows only its main part, without the agent\'s latest tool', async ($, on) => {

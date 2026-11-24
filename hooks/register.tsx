@@ -17,6 +17,8 @@ const HOLD_MS = 30_000
 const TURN_HOLD_MS = 600_000
 // A background task whose notification never comes (stopped from the UI, or lost) would show, and keep the ticker on, for good.
 const BACKGROUND_TTL_MS = 6 * 3_600_000
+// An agent the session continues has no notification to wait for if it goes quiet without one.
+const ADOPTED_QUIET_MS = 180_000
 const MAX_REMEMBERED = 256
 // What the spinner says while a compaction runs: `Compacting conversation` on the terminal, `Compacting` in VS Code.
 const COMPACTING_MESSAGE = /^compacting/i
@@ -63,6 +65,11 @@ const calls = new Map<string, Call>()
 const steps = new Map<string, Step>()
 const agentProgress = new Map<string, Progress>()
 const backgrounds = new Map<string, Call>()
+// Agents that run without an Agent call of their own (one the session continues with SendMessage), by id: the entry
+// made for them and when they last did anything. Agents a workflow runs are left alone, and a spawned agent keeps its description.
+const adopted = new Map<string, { call: Call; seenAt: number }>()
+const workflowAgents = new Map<string, true>()
+const descriptions = new Map<string, string>()
 let last: (Call & { endedAt: number }) | undefined
 let isTurn = false
 let isIdle = false
@@ -210,10 +217,27 @@ export const dropExpired = (tasks: Map<string, { startedAt: number }>, now: numb
   for (const [id, task] of tasks) if (now - task.startedAt > BACKGROUND_TTL_MS) tasks.delete(id)
 }
 
+// Drops the entries made for agents that did nothing for `quietMs` and have no call running: their notification never came.
+export const dropQuiet = (
+  adoptedAgents: Map<string, { call: { progress?: unknown }; seenAt: number }>,
+  tasks: Map<string, unknown>,
+  isRunning: (progress: unknown) => boolean,
+  now: number,
+) => {
+  for (const [id, { call, seenAt }] of adoptedAgents) {
+    if (tasks.get(id) !== call) adoptedAgents.delete(id)
+    else if (now - seenAt > ADOPTED_QUIET_MS && !isRunning(call.progress)) {
+      tasks.delete(id)
+      adoptedAgents.delete(id)
+    }
+  }
+}
+
 // Running calls and background work, latest start first (`seq` orders calls that start in one millisecond).
 // A call inside an agent that has its own entry shows there, as that entry's latest tool.
 const active = (): Item[] => {
   dropExpired(backgrounds, Date.now())
+  dropQuiet(adopted, backgrounds, progress => [...calls.values()].some(call => call.agent === progress), Date.now())
   const entries = [
     ...[...calls.values()].map(call => ({ call, isBackground: false })),
     ...[...backgrounds.values()].map(call => ({ call, isBackground: true })),
@@ -313,7 +337,30 @@ const stripText = ({ items: all, at }: Frame, lead?: string, columns = STATUS_FA
 }
 
 const forgetTasks = (text: string) => {
-  for (const [, id] of text.matchAll(/<task-id>([^<]+)<\/task-id>/g)) if (id) backgrounds.delete(id)
+  for (const [, id] of text.matchAll(/<task-id>([^<]+)<\/task-id>/g)) {
+    if (!id) continue
+    backgrounds.delete(id)
+    adopted.delete(id)
+  }
+}
+
+// An agent that works with no Agent call to show it (the session continued it) gets an entry of its own, as a background
+// agent does; its notification clears it, or its silence.
+const adopt = (agentId: string) => {
+  const progress = progressOf(agentId)
+  const entry = adopted.get(agentId)
+  if (entry) return remember(adopted, agentId, { ...entry, seenAt: Date.now() })
+  if (workflowAgents.has(agentId) || [...calls.values(), ...backgrounds.values()].some(call => call.progress === progress)) return
+  const call: Call = {
+    tool: 'Agent',
+    input: { description: descriptions.get(agentId) ?? '' },
+    startedAt: Date.now(),
+    seq: launches++,
+    isSubagent: false,
+    progress,
+  }
+  backgrounds.set(agentId, call)
+  remember(adopted, agentId, { call, seenAt: Date.now() })
 }
 
 // Credits `ms` to each entry in the position it held.
@@ -418,6 +465,7 @@ export const register: Register = (on, options) => {
     steps.delete(e.tool_use_id)
     isIdle = false
     calls.set(e.tool_use_id, call)
+    if (e.agentId !== undefined) adopt(e.agentId)
     refresh($)
     try {
       const ran = await next(e)
@@ -437,17 +485,28 @@ export const register: Register = (on, options) => {
   on('agent.spawn', async ($, e, next) => {
     const spawned = await next(e)
     const call = calls.get(e.tool_use_id)
-    if (call && spawned.agentId && !e.workflow) call.progress = progressOf(spawned.agentId)
+    if (spawned.agentId && e.workflow) remember(workflowAgents, spawned.agentId, true)
+    if (call && spawned.agentId && !e.workflow) {
+      call.progress = progressOf(spawned.agentId)
+      remember(descriptions, spawned.agentId, headline(call.input))
+      // The Agent call is the entry now: an entry made before the spawn returned would show the agent twice.
+      if (adopted.delete(spawned.agentId)) backgrounds.delete(spawned.agentId)
+    }
     return spawned
   }).catch(($, e, next) => next(e))
 
   on('turn.step', async function* ($, e, next) {
     const step: Step = { uses: new Map() }
+    if (e.agentId !== undefined) {
+      adopt(e.agentId)
+      refresh($)
+    }
     try {
       for await (const chunk of next(e)) {
         // Counting is best effort: a failure here must not cut the response short.
         try {
           tally(step, e.agentId, chunk)
+          if (e.agentId !== undefined && chunk.kind === 'stop') adopt(e.agentId)
         } catch {}
         yield chunk
       }
@@ -477,7 +536,11 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('turn.start', ($, e, next) => {
-    if (e.agentId !== undefined) return next(e)
+    if (e.agentId !== undefined) {
+      adopt(e.agentId)
+      refresh($)
+      return next(e)
+    }
     isTurn = true
     isIdle = false
     refresh($, true)
