@@ -1207,6 +1207,36 @@ test('the agents of a workflow are not given entries of their own', async ($, on
   expect(drawn).not.toContain('Agent')
 })
 
+test('a workflow agent that works before its spawn returns is not left with an entry of its own', async ($, on) => {
+  const nextFrame = frames(on)
+  let drawn = ''
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  on('ui.render', ($, e) => {
+    drawn = String(e.props.message)
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('agent.spawn', async () => {
+    await gate
+    return { model: 'm', agentId: 'wf1' }
+  })
+  on('turn.step', async function* (_, e) {
+    return yield* toolRequest(e, 'Bash', '{"description":"list files"}')
+  })
+  on('tool.call', () => ({ result: {} }))
+
+  const spawning = $.agent.spawn({ prompt: 'p', description: 'step', tool_use_id: 'toolu_wf', workflow: 'run' } as never)
+  await drain($.turn.step({ turnId: 'wf-t', index: 0, model: 'm', messageCount: 1, agentId: 'wf1' }))
+  release()
+  await spawning
+
+  await nextFrame()
+  const ui = await $.ui.mount(SPINNER)
+  await ui.unmount()
+  expect(drawn).not.toContain('Agent')
+})
+
 test('an entry made for an agent that went quiet is dropped, unless one of its calls is running', () => {
   const call = { progress: { tools: 1 } }
   const entries = () => ({ adopted: new Map([['a', { call, seenAt: 1000 }]]), tasks: new Map<string, unknown>([['a', call]]) })

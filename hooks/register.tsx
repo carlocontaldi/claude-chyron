@@ -502,13 +502,14 @@ export const register: Register = (on, options) => {
   on('agent.spawn', async ($, e, next) => {
     const spawned = await next(e)
     const call = calls.get(e.tool_use_id)
-    if (spawned.agentId && e.workflow) remember(workflowAgents, spawned.agentId, true)
-    if (call && spawned.agentId && !e.workflow) {
-      call.progress = progressOf(spawned.agentId)
-      remember(descriptions, spawned.agentId, headline(call.input))
-      // The Agent call is the entry now: an entry made before the spawn returned would show the agent twice.
-      if (adopted.delete(spawned.agentId)) backgrounds.delete(spawned.agentId)
+    const id = spawned.agentId
+    if (id && e.workflow) remember(workflowAgents, id, true)
+    if (call && id && !e.workflow) {
+      call.progress = progressOf(id)
+      remember(descriptions, id, headline(call.input))
     }
+    // An entry made before the spawn returned is wrong either way: the Agent call is the entry now, or a workflow's agent has none.
+    if (id && (call || e.workflow) && adopted.delete(id)) backgrounds.delete(id)
     return spawned
   }).catch(($, e, next) => next(e))
 
